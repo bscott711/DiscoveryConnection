@@ -3,50 +3,75 @@
 # A script to clean up the HPC Jupyter session.
 # It stops the remote Slurm job and the local tmux tunnel session.
 #
-# Usage: ./kill_hpc_jupyter.sh [Discovery | Innovator] <JOB_ID>
-#
 
-# --- Variable Definitions ---
-HPC_HOST=""
+# --- Defaults ---
+HPC_HOST="Discovery"
 JOB_ID=""
 
+# --- Help Function ---
+show_usage() {
+    echo "Usage: $0 -j <JOB_ID> [options]"
+    echo ""
+    echo "Stops the remote Slurm job and the local tmux tunnel session."
+    echo ""
+    echo "Required Argument:"
+    echo "  -j, --job <JOB_ID>   The Slurm Job ID to cancel."
+    echo ""
+    echo "Options:"
+    echo "  -H, --host <Host>    HPC host (Default: ${HPC_HOST})"
+    echo "                       Options: Discovery, Innovator"
+    echo "  -h, --help           Show this help message and exit"
+    echo ""
+    echo "Example:"
+    echo "  $0 -j 3256"
+    echo "  $0 -H Innovator -j 12345"
+}
+
 # --- Argument Parsing ---
-if [ -z "$1" ]; then
-    echo "❌ Error: No Job ID provided."
-    echo "Usage: ./kill_hpc_jupyter.sh [Discovery | Innovator] <JOB_ID>"
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        -h|--help)
+            show_usage
+            exit 0
+            ;;
+        -j|--job)
+            JOB_ID="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        -H|--host)
+            HPC_HOST="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        *)    # unknown option
+            echo "❌ Error: Unknown option: $1"
+            show_usage
+            exit 1
+            ;;
+    esac
+done
+
+# --- Validate Arguments ---
+if [ -z "$JOB_ID" ]; then
+    echo "❌ Error: Job ID is required."
+    show_usage
     exit 1
 fi
 
-# Check if the first argument is a host name
-case "$1" in
-    Discovery)
-        HPC_HOST="Discovery"
-        # If host is provided, Job ID must be the second argument
-        if [ -z "$2" ]; then
-            echo "❌ Error: Host specified but no Job ID provided."
-            echo "Usage: ./kill_hpc_jupyter.sh ${HPC_HOST} <JOB_ID>"
-            exit 1
-        fi
-        JOB_ID="$2"
-        ;;
-    Innovator)
-        HPC_HOST="Innovator"
-        # If host is provided, Job ID must be the second argument
-        if [ -z "$2" ]; then
-            echo "❌ Error: Host specified but no Job ID provided."
-            echo "Usage: ./kill_hpc_jupyter.sh ${HPC_HOST} <JOB_ID>"
-            exit 1
-        fi
-        JOB_ID="$2"
+case "$HPC_HOST" in
+    Discovery|Innovator)
+        # Valid, do nothing
         ;;
     *)
-        # First argument is not a known host, assume it's the Job ID
-        echo "ℹ️ No host specified. Defaulting to Discovery."
-        HPC_HOST="Discovery"
-        JOB_ID="$1"
+        echo "❌ Error: Invalid host '$HPC_HOST'."
+        echo "Please use 'Discovery' or 'Innovator'."
+        exit 1
         ;;
 esac
 
+# --- Main Logic ---
 SESSION_NAME="hpc-tunnel-${JOB_ID}"
 
 echo "🧹 Starting cleanup for Job ID: ${JOB_ID} on ${HPC_HOST}"

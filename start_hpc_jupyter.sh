@@ -3,57 +3,82 @@
 # A script to start JupyterLab on the HPC, automatically create the
 # local SSH tunnel, and open the URL in the default browser.
 #
-# Usage: ./start_hpc_jupyter.sh [Host] [Env] [Partition] [Memory]
-# Defaults: Host=Discovery, Env=ppk5d, Partition=gpu, Memory=128
-#
 
-# --- Configuration ---
+# --- Configuration & Defaults ---
 LOCAL_PORT="9999"
+HPC_HOST="Discovery"
+ENV_NAME="ppk5d"
+PARTITION="gpu"
+MEMORY="128"
 
-# --- Argument Handling ---
-# Hostname (Default to Discovery if $1 is omitted)
-if [ -z "$1" ]; then
-    echo "ℹ️ No host specified. Defaulting to Discovery."
-    HPC_HOST="Discovery"
-else
-    case "$1" in
-        Discovery)
-            HPC_HOST="Discovery"
+# --- Help Function ---
+show_usage() {
+    echo "Usage: $0 [options]"
+    echo ""
+    echo "Starts a JupyterLab session on the HPC, creates an SSH tunnel, and opens it."
+    echo ""
+    echo "Options:"
+    echo "  -H, --host <Host>       HPC host (Default: ${HPC_HOST})"
+    echo "                          Options: Discovery, Innovator"
+    echo "  -e, --env <Env>         Python environment name (Default: ${ENV_NAME})"
+    echo "  -p, --partition <Part>  Slurm partition (Default: ${PARTITION})"
+    echo "  -m, --mem <Memory>      Memory to request in GB (Default: ${MEMORY})"
+    echo "  -h, --help              Show this help message and exit"
+    echo ""
+    echo "Example:"
+    echo "  $0 -p all-gpu -m 64"
+}
+
+# --- Argument Parsing ---
+# This loop processes arguments in any order
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        -h|--help)
+            show_usage
+            exit 0
             ;;
-        Innovator)
-            HPC_HOST="Innovator"
+        -H|--host)
+            HPC_HOST="$2"
+            shift # past argument
+            shift # past value
             ;;
-        *)
-            echo "❌ Error: Invalid host '$1'."
-            echo "Please use 'Discovery' or 'Innovator'."
+        -e|--env)
+            ENV_NAME="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        -p|--partition)
+            PARTITION="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        -m|--mem)
+            MEMORY="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        *)    # unknown option
+            echo "❌ Error: Unknown option: $1"
+            show_usage
             exit 1
             ;;
     esac
-fi
+done
 
-# Environment Name (Default to ppk5d if $2 is omitted)
-if [ -z "$2" ]; then
-    if [ ! -z "$1" ]; then
-      echo "ℹ️ No environment name specified. Defaulting to ppk5d."
-    fi
-    ENV_NAME="ppk5d"
-else
-    ENV_NAME="$2"
-fi
+# --- Validate Host ---
+case "$HPC_HOST" in
+    Discovery|Innovator)
+        # Valid, do nothing
+        ;;
+    *)
+        echo "❌ Error: Invalid host '$HPC_HOST'."
+        echo "Please use 'Discovery' or 'Innovator'."
+        exit 1
+        ;;
+esac
 
-# Partition (Default to gpu if $3 is omitted)
-if [ -z "$3" ]; then
-    PARTITION="gpu"
-else
-    PARTITION="$3"
-fi
-
-# Memory (Default to 128G if $4 is omitted)
-if [ -z "$4" ]; then
-    MEMORY="128"
-else
-    MEMORY="$4"
-fi
+# --- Final variable prep ---
 MEMORY_GB="${MEMORY}G" # Add the 'G' for sbatch
 
 echo "🚀 Starting job with settings:"
@@ -69,10 +94,6 @@ ssh ${HPC_HOST} "mkdir -p ~/logs"
 echo "⏳ Submitting JupyterLab job to ${HPC_HOST}..."
 
 # --- (JOB SUBMISSION BLOCK) ---
-# This block pipes the script directly to sbatch.
-# Variables like ${ENV_NAME} are expanded LOCALLY.
-# Variables like \$node are ESCAPED locally, sent to sbatch,
-# and expanded on the COMPUTE NODE.
 JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_SCRIPT
 #!/bin/bash
 #SBATCH --job-name=jupyter-${ENV_NAME}
