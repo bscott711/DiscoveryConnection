@@ -6,18 +6,6 @@
 # Usage: ./start_hpc_jupyter.sh [Host] [Env] [Partition] [Memory]
 # Defaults: Host=Discovery, Env=ppk5d, Partition=gpu, Memory=128
 #
-# Example: ./start_hpc_jupyter.sh
-#   (Discovery, ppk5d, gpu, 128G)
-#
-# Example: ./start_hpc_jupyter.sh Innovator
-#   (Innovator, ppk5d, gpu, 128G)
-#
-# Example: ./start_hpc_jupyter.sh Innovator petakit_env
-#   (Innovator, petakit_env, gpu, 128G)
-#
-# Example: ./start_hpc_jupyter.sh Discovery my_env debug 32
-#   (Discovery, my_env, debug, 32G)
-#
 
 # --- Configuration ---
 LOCAL_PORT="9999"
@@ -52,8 +40,6 @@ if [ -z "$2" ]; then
 else
     ENV_NAME="$2"
 fi
-# Construct the path assuming it's in the home directory
-ENV_PATH="~/${ENV_NAME}/bin/activate" 
 
 # Partition (Default to gpu if $3 is omitted)
 if [ -z "$3" ]; then
@@ -71,67 +57,75 @@ fi
 MEMORY_GB="${MEMORY}G" # Add the 'G' for sbatch
 
 echo "🚀 Starting job with settings:"
-echo "   Host:        ${HPC_HOST}"
-echo "   Environment: ${ENV_NAME}"
-echo "   Partition:   ${PARTITION}"
-echo "   Memory:      ${MEMORY_GB}"
+echo "   Host:         ${HPC_HOST}"
+echo "   Environment:  ${ENV_NAME} (at ~/${ENV_NAME}/bin/activate)"
+echo "   Partition:    ${PARTITION}"
+echo "   Memory:       ${MEMORY_GB}"
 
 # --- Main Logic ---
+echo "📁 Ensuring 'logs' directory exists on ${HPC_HOST}..."
+ssh ${HPC_HOST} "mkdir -p ~/logs"
+
 echo "⏳ Submitting JupyterLab job to ${HPC_HOST}..."
 
-# Submit the Slurm job
-# Pass all required variables to the remote shell
-JOB_ID=$(ssh ${HPC_HOST} "ENV_NAME=${ENV_NAME} ENV_PATH=${ENV_PATH} PARTITION=${PARTITION} MEMORY_GB=${MEMORY_GB} HPC_HOST_PASSED=${HPC_HOST} bash -l -c '
-    sbatch --parsable <<\\EOF
+# --- (JOB SUBMISSION BLOCK) ---
+# This block pipes the script directly to sbatch.
+# Variables like ${ENV_NAME} are expanded LOCALLY.
+# Variables like \$node are ESCAPED locally, sent to sbatch,
+# and expanded on the COMPUTE NODE.
+JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_SCRIPT
 #!/bin/bash
 #SBATCH --job-name=jupyter-${ENV_NAME}
 #SBATCH --partition=${PARTITION}
 #SBATCH --gres=gpu:1
 #SBATCH --time=04:00:00
 #SBATCH --mem=${MEMORY_GB}
-#SBATCH --output=%x-%j.log
+#SBATCH --output=logs/%x-%j.log
 #SBATCH --open-mode=truncate
 
-# Use the passed environment variables
-env_name=\"${ENV_NAME}\"
-env_path=\"${ENV_PATH}\"
-hpc_host=\"${HPC_HOST_PASSED}\" # Use the variable passed from the ssh command
-
 unset XDG_RUNTIME_DIR
-node=\$(hostname -s)
-port=\$(shuf -i 8000-9999 -n 1)
 
-echo \"Preparing JupyterLab on node \$node, port \$port\"
-echo \"Running on cluster: \$hpc_host\"
-echo \"Using environment: \$env_name\"
+# --- Define compute-node variables ---
+export node=\$(hostname -s)
+export port=\$((8000 + RANDOM % 2000))
 
+# --- Define variables for logic ---
+# These are "baked in" by the local shell
+HPC_HOST_PASSED="${HPC_HOST}"
+ENV_NAME_PASSED="${ENV_NAME}"
+# This one is mixed: \$HOME is from compute node, \${ENV_NAME} is local
+expanded_env_path="\$HOME/\${ENV_NAME_PASSED}/bin/activate"
+
+
+# --- Use the variables ---
+echo "Preparing JupyterLab on node \$node, port \$port"
+echo "Running on cluster: \${HPC_HOST_PASSED}"
+echo "Using environment: \${ENV_NAME_PASSED}"
+
+# --- Module Loading and Activation in Correct Order ---
+
+echo "Loading Python module..."
 module load python/3.11
 
-echo \"Loading MATLAB module...\"
-if [[ \"\$hpc_host\" == \"Discovery\" ]]; then
+echo "Loading MATLAB module..."
+if [[ "\${HPC_HOST_PASSED}" == "Discovery" ]]; then
     module load matlab/R2024b
-elif [[ \"\$hpc_host\" == \"Innovator\" ]]; then
+elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
     module load matlab/R2023b
-else
-    echo \"⚠️ Warning: Unknown host \$hpc_host, attempting to load default MATLAB.\"
 fi
 
-# Check activation script path carefully
-# Expand ~ manually as it might not work reliably inside the script
-expanded_env_path=\$(eval echo \$env_path) 
-if [ ! -f \"\$expanded_env_path\" ]; then
-    echo \"❌ ERROR: Environment activation script not found at \$expanded_env_path\"
+echo "Activating Python environment..."
+if [ ! -f "\${expanded_env_path}" ]; then
+    echo "❌ ERROR: Environment activation script not found at \${expanded_env_path}"
     exit 1
 fi
-echo \"Activating Python environment...\"
-source \"\$expanded_env_path\"
+source "\${expanded_env_path}"
 
-echo \"Launching JupyterLab...\"
+echo "Launching JupyterLab..."
 jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
-EOF
-'")
-
-# --- (Rest of the script remains the same) ---
+SBATCH_SCRIPT
+)
+# --- (End of job submission block) ---
 
 if [ -z "$JOB_ID" ]; then
     echo "❌ Failed to submit job. Exiting."
@@ -139,10 +133,10 @@ if [ -z "$JOB_ID" ]; then
 fi
 
 echo "✅ Job submitted with ID: ${JOB_ID}"
-LOG_FILE="jupyter-${ENV_NAME}-${JOB_ID}.log"
+# Use the dynamic log file name, now inside the 'logs' folder
+LOG_FILE="logs/jupyter-${ENV_NAME}-${JOB_ID}.log"
 echo "⏳ Waiting for job to start and URL to be ready (checking ~/${LOG_FILE})..."
 
-# (Waiting loop, Tunneling, Browser opening code remains the same as previous version)
 while true; do
     STATUS=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o %T" 2>/dev/null) || STATUS="UNKNOWN"
     if [[ "$STATUS" != "PENDING" && "$STATUS" != "RUNNING" ]]; then
@@ -191,5 +185,6 @@ echo "   ${FINAL_URL}"
 echo ""
 echo "STEP 2: When finished, stop everything with:"
 echo ""
+# Corrected kill command to match the new parameterized script
 echo "   ./kill_hpc_jupyter.sh ${HPC_HOST} ${JOB_ID} "
 echo "------------------------------------------------------------------"
