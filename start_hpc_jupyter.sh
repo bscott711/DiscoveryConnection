@@ -182,7 +182,7 @@ FINAL_URL="http://localhost:${LOCAL_PORT}/?token=${TOKEN}"
 
 echo "Tunneling is being set up in a new terminal window..."
 SESSION_NAME="hpc-tunnel-${JOB_ID}"
-SSH_COMMAND="ssh -N -L ${LOCAL_PORT}:localhost:${PORT} -J ${HPC_HOST} ${NODE}"
+SSH_COMMAND="ssh -N -o StrictHostKeyChecking=no -L ${LOCAL_PORT}:localhost:${PORT} -J ${HPC_HOST} ${NODE}"
 
 osascript <<EOF
 tell application "Terminal"
