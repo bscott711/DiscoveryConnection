@@ -10,6 +10,9 @@ HPC_HOST="Discovery"
 ENV_NAME="ppk5d"
 PARTITION="gpu"
 MEMORY="128"
+TIME="04:00:00"
+CPUS="8"
+GRES="gpu:1"
 
 # --- Help Function ---
 show_usage() {
@@ -23,10 +26,13 @@ show_usage() {
     echo "  -e, --env <Env>         Python environment name (Default: ${ENV_NAME})"
     echo "  -p, --partition <Part>  Slurm partition (Default: ${PARTITION})"
     echo "  -m, --mem <Memory>      Memory to request in GB (Default: ${MEMORY})"
+    echo "  -t, --time <Time>       Job time limit (Default: ${TIME})"
+    echo "  -c, --cpus <CPUs>       Number of CPU cores (Default: ${CPUS})"
+    echo "  -g, --gres <GRES>       GPU resources (Default: ${GRES})"
     echo "  -h, --help              Show this help message and exit"
     echo ""
     echo "Example:"
-    echo "  $0 -p all-gpu -m 64"
+    echo "  $0 -p all-gpu -m 64 -t 08:00:00 -c 16 -g gpu:2"
 }
 
 # --- Argument Parsing ---
@@ -58,6 +64,21 @@ while [[ $# -gt 0 ]]; do
             shift # past argument
             shift # past value
             ;;
+        -t|--time)
+            TIME="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        -c|--cpus)
+            CPUS="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        -g|--gres)
+            GRES="$2"
+            shift # past argument
+            shift # past value
+            ;;
         *)    # unknown option
             echo "❌ Error: Unknown option: $1"
             show_usage
@@ -86,6 +107,10 @@ echo "   Host:         ${HPC_HOST}"
 echo "   Environment:  ${ENV_NAME} (at ~/${ENV_NAME}/bin/activate)"
 echo "   Partition:    ${PARTITION}"
 echo "   Memory:       ${MEMORY_GB}"
+echo "   Time:         ${TIME}"
+echo "   CPUs:         ${CPUS}"
+echo "   GPUs:         ${GRES}"
+
 
 # --- Main Logic ---
 echo "📁 Ensuring 'logs' directory exists on ${HPC_HOST}..."
@@ -98,8 +123,9 @@ JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_SCRIPT
 #!/bin/bash
 #SBATCH --job-name=jupyter-${ENV_NAME}
 #SBATCH --partition=${PARTITION}
-#SBATCH --gres=gpu:1
-#SBATCH --time=04:00:00
+#SBATCH --gres=${GRES}
+#SBATCH --cpus-per-task=${CPUS}
+#SBATCH --time=${TIME}
 #SBATCH --mem=${MEMORY_GB}
 #SBATCH --output=logs/%x-%j.log
 #SBATCH --open-mode=truncate
@@ -206,6 +232,6 @@ echo "   ${FINAL_URL}"
 echo ""
 echo "STEP 2: When finished, stop everything with:"
 echo ""
-# Corrected kill command to match the new parameterized script
-echo "   ./kill_hpc_jupyter.sh ${HPC_HOST} ${JOB_ID} "
+# Corrected kill command to use flags
+echo "   ./kill_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
 echo "------------------------------------------------------------------"
