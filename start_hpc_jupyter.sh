@@ -7,7 +7,6 @@
 # --- Configuration & Defaults ---
 LOCAL_PORT="9999"
 HPC_HOST="Discovery"
-ENV_NAME="ppk5d"
 PARTITION="gpu"
 MEMORY="128"
 TIME="08:00:00"
@@ -23,9 +22,6 @@ show_usage() {
     echo "Options:"
     echo "  -H, --host <Host>       HPC host (Default: ${HPC_HOST})"
     echo "                          Options: Discovery, Innovator"
-    echo "  -e, --env <Env>         Python environment name (Default: ${ENV_NAME})."
-    echo "                          Will search for venv and conda envs."
-    echo "                          Use 'none' to skip activation and use base."
     echo "  -p, --partition <Part>  Slurm partition (Default: ${PARTITION})"
     echo "  -m, --mem <Memory>      Memory to request in GB (Default: ${MEMORY})"
     echo "  -t, --time <Time>       Job time limit (Default: ${TIME})"
@@ -35,7 +31,6 @@ show_usage() {
     echo ""
     echo "Example:"
     echo "  $0 -p all-gpu -m 64 -t 08:00:00 -c 16 -g gpu:2"
-    echo "  $0 -e none -p cpu"
 }
 
 # --- Argument Parsing ---
@@ -49,11 +44,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         -H|--host)
             HPC_HOST="$2"
-            shift # past argument
-            shift # past value
-            ;;
-        -e|--env)
-            ENV_NAME="$2"
             shift # past argument
             shift # past value
             ;;
@@ -104,14 +94,10 @@ esac
 
 # --- Final variable prep ---
 MEMORY_GB="${MEMORY}G" # Add the 'G' for sbatch
+JOB_NAME="jupyter-lab"
 
 echo "🚀 Starting job with settings:"
 echo "   Host:         ${HPC_HOST}"
-if [[ "${ENV_NAME}" == "none" ]]; then
-    echo "   Environment:  (base)"
-else
-    echo "   Environment:  ${ENV_NAME} (will search for venv/conda)"
-fi
 echo "   Partition:    ${PARTITION}"
 echo "   Memory:       ${MEMORY_GB}"
 echo "   Time:         ${TIME}"
@@ -128,7 +114,7 @@ echo "⏳ Submitting JupyterLab job to ${HPC_HOST}..."
 # --- (JOB SUBMISSION BLOCK) ---
 JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_SCRIPT
 #!/bin/bash
-#SBATCH --job-name=jupyter-${ENV_NAME}
+#SBATCH --job-name=${JOB_NAME}
 #SBATCH --partition=${PARTITION}
 #SBATCH --gres=${GRES}
 #SBATCH --cpus-per-task=${CPUS}
@@ -136,9 +122,6 @@ JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_SCRIPT
 #SBATCH --mem=${MEMORY_GB}
 #SBATCH --output=logs/%x-%j.log
 #SBATCH --open-mode=truncate
-
-module unload pypetakit5d
-module purge
 
 unset XDG_RUNTIME_DIR
 
@@ -149,54 +132,23 @@ export port=\$((8000 + RANDOM % 2000))
 # --- Define variables for logic ---
 # These are "baked in" by the local shell
 HPC_HOST_PASSED="${HPC_HOST}"
-ENV_NAME_PASSED="${ENV_NAME}"
 
 # --- Use the variables ---
 echo "Preparing JupyterLab on node \$node, port \$port"
 echo "Running on cluster: \${HPC_HOST_PASSED}"
 
-# --- Module Loading and Activation in Correct Order ---
-echo "Loading PyPetaKit5D module..."
+# --- Module Loading ---
+# This module provides the 'jupyter lab' command
+echo "Loading PyPetaKit5D module (for jupyter)..."
 module load pypetakit5d
 
-# This part is still needed to activate your 'ppk5d' venv
-# which contains Jupyter, opym, ipywidgets, etc.
-# Your venv will inherit the environment from the modules.
-if [[ "\${ENV_NAME_PASSED}" != "none" ]]; then
-    echo "Attempting to activate environment: \${ENV_NAME_PASSED}"
-    ACTIVATED=false
-
-    # --- Strategy 1: Check for a standard virtual environment ---
-    # Check for ~/ENV_NAME/.venv/bin/activate
-    VENV_PATH_1="\$HOME/\${ENV_NAME_PASSED}/.venv/bin/activate"
-    # Check for ~/ENV_NAME/bin/activate
-    VENV_PATH_2="\$HOME/\${ENV_NAME_PASSED}/bin/activate"
-
-    # Swapped the order to check for VENV_PATH_2 *first*
-    if [ -f "\${VENV_PATH_2}" ]; then
-        echo "Found standard virtual environment at: \${VENV_PATH_2}"
-        source "\${VENV_PATH_2}"
-        ACTIVATED=true
-    elif [ -f "\${VENV_PATH_1}" ]; then
-        echo "Found standard virtual environment at: \${VENV_PATH_1}"
-        source "\${VENV_PATH_1}"
-        ACTIVATED=true
-    else
-        echo "Info: No standard venv found at \${VENV_PATH_1} or \${VENV_PATH_2}."
-    fi
-
-    # --- Final Check ---
-    if [ "\${ACTIVATED}" = false ]; then
-        echo "❌ ERROR: Failed to activate environment '\${ENV_NAME_PASSED}'."
-        echo "   Checked venv path 1: \${VENV_PATH_1}"
-        echo "   Checked venv path 2: \${VENV_PATH_2}"
-        echo "   Please check the environment name and location."
-        exit 1
-    fi
-else
-    echo "Skipping Python environment activation (using base)."
+# Load host-specific MATLAB
+echo "Loading MATLAB module..."
+if [[ "\${HPC_HOST_PASSED}" == "Discovery" ]]; then
+    module load matlab/R2024b
+elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
+    module load matlab/R2023b
 fi
-# --- END OF UPDATED ACTIVATION LOGIC ---
 
 echo "Launching JupyterLab..."
 jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
@@ -211,10 +163,11 @@ fi
 
 echo "✅ Job submitted with ID: ${JOB_ID}"
 # Use the dynamic log file name, now inside the 'logs' folder
-LOG_FILE="logs/jupyter-${ENV_NAME}-${JOB_ID}.log"
+LOG_FILE="logs/${JOB_NAME}-${JOB_ID}.log"
 echo "⏳ Waiting for job to start and URL to be ready (checking ~/${LOG_FILE})..."
 
-while true; do
+while true;
+do
     STATUS=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o %T" 2>/dev/null) || STATUS="UNKNOWN"
     if [[ "$STATUS" != "PENDING" && "$STATUS" != "RUNNING" ]]; then
         echo "❌ Job ${JOB_ID} is no longer running (status: $STATUS). Check output with:"
