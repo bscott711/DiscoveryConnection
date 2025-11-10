@@ -142,8 +142,9 @@ export port=\$((8000 + RANDOM % 2000))
 HPC_HOST_PASSED="${HPC_HOST}"
 ENV_NAME_PASSED="${ENV_NAME}"
 # Path to the venv's site-packages
-# NOTE: The "python3.11" is a guess from your previous error logs.
 VENV_SITE_PACKAGES="\$HOME/\${ENV_NAME_PASSED}/lib/python3.11/site-packages"
+# Path to your local software directory
+SOFTWARE_PATH="\$HOME/software"
 
 
 # --- Use the variables ---
@@ -167,7 +168,8 @@ fi
 # Instead of activating the venv, which conflicts with conda,
 # just add its site-packages to the PYTHONPATH.
 echo "Injecting venv packages from \${VENV_SITE_PACKAGES}"
-export PYTHONPATH="\${VENV_SITE_PACKAGES}:\${PYTHONPATH}"
+echo "Injecting local projects from \${SOFTWARE_PATH}"
+export PYTHONPATH="\${VENV_SITE_PACKAGES}:\${SOFTWARE_PATH}:\${PYTHONPATH}"
 
 echo "Launching JupyterLab..."
 # Run the base module's python, which can now find your
