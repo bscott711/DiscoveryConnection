@@ -86,19 +86,32 @@ echo "📄 Using log file: ${LOG_FILE_NAME}"
 
 # --- Get Connection Details ---
 echo "⏳ Fetching connection details..."
-NODE=$(ssh ${HPC_HOST} "grep 'Preparing JupyterLab on node' ${LOG_FILE_NAME} | sed 's/.*node //;s/,.*//'")
+
+# 1. Get Node Name via squeue (most reliable method)
+# %N gives the Node List for the job ID.
+NODE=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o %N" 2>/dev/null)
+
+# 2. Get URL, Port, and Token from the log file (which is successful)
 JUPYTER_URL=$(ssh ${HPC_HOST} "grep 'http://127.0.0.1' ${LOG_FILE_NAME} | head -n 1 | grep -o 'http://[^ ]*'")
 PORT=$(echo ${JUPYTER_URL} | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
 TOKEN=$(echo ${JUPYTER_URL} | sed -n 's|.*token=\([^ ]*\).*|\1|p')
 FINAL_URL="http://localhost:${LOCAL_PORT}/?token=${TOKEN}"
 
-if [ -z "$NODE" ] || [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
-    echo "❌ Error: Could not parse connection details from log file."
+if [ -z "$NODE" ]; then
+    echo "❌ Error: Could not find the compute node name (squeue returned empty)."
+    echo "   Job Status might be Pending or Missing."
+    exit 1
+fi
+
+if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+    echo "❌ Error: Could not parse URL/Port/Token from log file (${LOG_FILE_NAME})."
     echo "   Node: ${NODE}"
     echo "   Port: ${PORT}"
     echo "   Token: ${TOKEN}"
     exit 1
 fi
+
+echo "✅ Connection details found: Node=${NODE}, Port=${PORT}"
 
 # --- Rebuild Tunnel ---
 SESSION_NAME="hpc-tunnel-${JOB_ID}"
