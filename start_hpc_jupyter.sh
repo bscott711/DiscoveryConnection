@@ -7,6 +7,7 @@
 # --- Configuration & Defaults ---
 LOCAL_PORT="9999"
 HPC_HOST="Discovery"
+ENV_NAME="ppk5d" # Default personal venv name
 PARTITION="gpu"
 MEMORY="128"
 TIME="08:00:00"
@@ -22,6 +23,7 @@ show_usage() {
     echo "Options:"
     echo "  -H, --host <Host>       HPC host (Default: ${HPC_HOST})"
     echo "                          Options: Discovery, Innovator"
+    echo "  -e, --env <Env>         Your personal venv name (Default: ${ENV_NAME})"
     echo "  -p, --partition <Part>  Slurm partition (Default: ${PARTITION})"
     echo "  -m, --mem <Memory>      Memory to request in GB (Default: ${MEMORY})"
     echo "  -t, --time <Time>       Job time limit (Default: ${TIME})"
@@ -44,6 +46,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         -H|--host)
             HPC_HOST="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        -e|--env)
+            ENV_NAME="$2"
             shift # past argument
             shift # past value
             ;;
@@ -94,10 +101,11 @@ esac
 
 # --- Final variable prep ---
 MEMORY_GB="${MEMORY}G" # Add the 'G' for sbatch
-JOB_NAME="jupyter-lab"
+JOB_NAME="jupyter-${ENV_NAME}" # Dynamic job name
 
 echo "🚀 Starting job with settings:"
 echo "   Host:         ${HPC_HOST}"
+echo "   Environment:  ${ENV_NAME} (at ~/${ENV_NAME}/bin/activate)"
 echo "   Partition:    ${PARTITION}"
 echo "   Memory:       ${MEMORY_GB}"
 echo "   Time:         ${TIME}"
@@ -132,17 +140,22 @@ export port=\$((8000 + RANDOM % 2000))
 # --- Define variables for logic ---
 # These are "baked in" by the local shell
 HPC_HOST_PASSED="${HPC_HOST}"
+ENV_NAME_PASSED="${ENV_NAME}"
+# Path to the venv's site-packages
+# NOTE: The "python3.11" is a guess from your previous error logs.
+VENV_SITE_PACKAGES="\$HOME/\${ENV_NAME_PASSED}/lib/python3.11/site-packages"
+
 
 # --- Use the variables ---
 echo "Preparing JupyterLab on node \$node, port \$port"
 echo "Running on cluster: \${HPC_HOST_PASSED}"
+echo "Using environment: ${ENV_NAME}"
 
 # --- Module Loading ---
-# This module provides the 'jupyter lab' command
+# Load base modules first
 echo "Loading PyPetaKit5D module (for jupyter)..."
 module load pypetakit5d
 
-# Load host-specific MATLAB
 echo "Loading MATLAB module..."
 if [[ "\${HPC_HOST_PASSED}" == "Discovery" ]]; then
     module load matlab/R2024b
@@ -150,8 +163,16 @@ elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
     module load matlab/R2023b
 fi
 
+# --- Extend Python's Path ---
+# Instead of activating the venv, which conflicts with conda,
+# just add its site-packages to the PYTHONPATH.
+echo "Injecting venv packages from \${VENV_SITE_PACKAGES}"
+export PYTHONPATH="\${VENV_SITE_PACKAGES}:\${PYTHONPATH}"
+
 echo "Launching JupyterLab..."
-jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
+# Run the base module's python, which can now find your
+# packages (like jupyter-matlab-proxy) via PYTHONPATH.
+python -m jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
 SBATCH_SCRIPT
 )
 # --- (End of job submission block) ---
