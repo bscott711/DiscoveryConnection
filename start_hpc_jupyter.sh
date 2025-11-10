@@ -10,7 +10,7 @@ HPC_HOST="Discovery"
 ENV_NAME="ppk5d"
 PARTITION="gpu"
 MEMORY="128"
-TIME="04:00:00"
+TIME="08:00:00"
 CPUS="8"
 GRES="gpu:1"
 
@@ -23,7 +23,9 @@ show_usage() {
     echo "Options:"
     echo "  -H, --host <Host>       HPC host (Default: ${HPC_HOST})"
     echo "                          Options: Discovery, Innovator"
-    echo "  -e, --env <Env>         Python environment name (Default: ${ENV_NAME})"
+    echo "  -e, --env <Env>         Python environment name (Default: ${ENV_NAME})."
+    echo "                          Will search for venv and conda envs."
+    echo "                          Use 'none' to skip activation and use base."
     echo "  -p, --partition <Part>  Slurm partition (Default: ${PARTITION})"
     echo "  -m, --mem <Memory>      Memory to request in GB (Default: ${MEMORY})"
     echo "  -t, --time <Time>       Job time limit (Default: ${TIME})"
@@ -33,6 +35,7 @@ show_usage() {
     echo ""
     echo "Example:"
     echo "  $0 -p all-gpu -m 64 -t 08:00:00 -c 16 -g gpu:2"
+    echo "  $0 -e none -p cpu"
 }
 
 # --- Argument Parsing ---
@@ -104,7 +107,11 @@ MEMORY_GB="${MEMORY}G" # Add the 'G' for sbatch
 
 echo "🚀 Starting job with settings:"
 echo "   Host:         ${HPC_HOST}"
-echo "   Environment:  ${ENV_NAME} (at ~/${ENV_NAME}/bin/activate)"
+if [[ "${ENV_NAME}" == "none" ]]; then
+    echo "   Environment:  (base)"
+else
+    echo "   Environment:  ${ENV_NAME} (will search for venv/conda)"
+fi
 echo "   Partition:    ${PARTITION}"
 echo "   Memory:       ${MEMORY_GB}"
 echo "   Time:         ${TIME}"
@@ -130,6 +137,9 @@ JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_SCRIPT
 #SBATCH --output=logs/%x-%j.log
 #SBATCH --open-mode=truncate
 
+module unload pypetakit5d
+module purge
+
 unset XDG_RUNTIME_DIR
 
 # --- Define compute-node variables ---
@@ -140,33 +150,53 @@ export port=\$((8000 + RANDOM % 2000))
 # These are "baked in" by the local shell
 HPC_HOST_PASSED="${HPC_HOST}"
 ENV_NAME_PASSED="${ENV_NAME}"
-# This one is mixed: \$HOME is from compute node, \${ENV_NAME} is local
-expanded_env_path="\$HOME/\${ENV_NAME_PASSED}/bin/activate"
-
 
 # --- Use the variables ---
 echo "Preparing JupyterLab on node \$node, port \$port"
 echo "Running on cluster: \${HPC_HOST_PASSED}"
-echo "Using environment: \${ENV_NAME_PASSED}"
 
 # --- Module Loading and Activation in Correct Order ---
+echo "Loading PyPetaKit5D module..."
+module load pypetakit5d
 
-echo "Loading Python module..."
-module load python/3.11
+# This part is still needed to activate your 'ppk5d' venv
+# which contains Jupyter, opym, ipywidgets, etc.
+# Your venv will inherit the environment from the modules.
+if [[ "\${ENV_NAME_PASSED}" != "none" ]]; then
+    echo "Attempting to activate environment: \${ENV_NAME_PASSED}"
+    ACTIVATED=false
 
-echo "Loading MATLAB module..."
-if [[ "\${HPC_HOST_PASSED}" == "Discovery" ]]; then
-    module load matlab/R2024b
-elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
-    module load matlab/R2023b
+    # --- Strategy 1: Check for a standard virtual environment ---
+    # Check for ~/ENV_NAME/.venv/bin/activate
+    VENV_PATH_1="\$HOME/\${ENV_NAME_PASSED}/.venv/bin/activate"
+    # Check for ~/ENV_NAME/bin/activate
+    VENV_PATH_2="\$HOME/\${ENV_NAME_PASSED}/bin/activate"
+
+    # Swapped the order to check for VENV_PATH_2 *first*
+    if [ -f "\${VENV_PATH_2}" ]; then
+        echo "Found standard virtual environment at: \${VENV_PATH_2}"
+        source "\${VENV_PATH_2}"
+        ACTIVATED=true
+    elif [ -f "\${VENV_PATH_1}" ]; then
+        echo "Found standard virtual environment at: \${VENV_PATH_1}"
+        source "\${VENV_PATH_1}"
+        ACTIVATED=true
+    else
+        echo "Info: No standard venv found at \${VENV_PATH_1} or \${VENV_PATH_2}."
+    fi
+
+    # --- Final Check ---
+    if [ "\${ACTIVATED}" = false ]; then
+        echo "❌ ERROR: Failed to activate environment '\${ENV_NAME_PASSED}'."
+        echo "   Checked venv path 1: \${VENV_PATH_1}"
+        echo "   Checked venv path 2: \${VENV_PATH_2}"
+        echo "   Please check the environment name and location."
+        exit 1
+    fi
+else
+    echo "Skipping Python environment activation (using base)."
 fi
-
-echo "Activating Python environment..."
-if [ ! -f "\${expanded_env_path}" ]; then
-    echo "❌ ERROR: Environment activation script not found at \${expanded_env_path}"
-    exit 1
-fi
-source "\${expanded_env_path}"
+# --- END OF UPDATED ACTIVATION LOGIC ---
 
 echo "Launching JupyterLab..."
 jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
@@ -230,8 +260,12 @@ echo "STEP 1: If it didn't open automatically, copy this URL into your browser:"
 echo ""
 echo "   ${FINAL_URL}"
 echo ""
-echo "STEP 2: When finished, stop everything with:"
+echo "STEP 2: If you close your laptop or the tunnel breaks, run this"
+echo "        script to find the job and reconnect:"
 echo ""
-# Corrected kill command to use flags
+echo "   ./reconnect_hpc_jupyter.sh -H ${HPC_HOST}"
+echo ""
+echo "STEP 3: When finished, stop everything with:"
+echo ""
 echo "   ./kill_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
 echo "------------------------------------------------------------------"
