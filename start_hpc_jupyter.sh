@@ -14,6 +14,33 @@ TIME="08:00:00"
 CPUS="8"
 GRES="gpu:1"
 
+# --- Function to find available local port ---
+find_available_port() {
+    local base_port=$1
+    local max_attempts=50
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        local port_to_check
+        if [ $attempt -eq 0 ]; then
+            port_to_check=$base_port
+        else
+            # For subsequent attempts, use random ports in range
+            port_to_check=$((8000 + RANDOM % 2000))
+        fi
+        
+        # Check if port is available locally
+        if ! lsof -Pi :$port_to_check -sTCP:LISTEN -t >/dev/null 2>&1; then
+            echo $port_to_check
+            return 0
+        fi
+        attempt=$((attempt + 1))
+    done
+    
+    echo "❌ Error: Could not find an available local port after $max_attempts attempts"
+    exit 1
+}
+
 # --- Help Function ---
 show_usage() {
     echo "Usage: $0 [options]"
@@ -98,6 +125,10 @@ case "$HPC_HOST" in
         exit 1
         ;;
 esac
+
+# --- Find an available local port ---
+LOCAL_PORT=$(find_available_port $LOCAL_PORT)
+echo "🌐 Using local port: ${LOCAL_PORT}"
 
 # --- Final variable prep ---
 MEMORY_GB="${MEMORY}G" # Add the 'G' for sbatch
@@ -239,7 +270,7 @@ echo ""
 echo "STEP 2: If you close your laptop or the tunnel breaks, run this"
 echo "        script to find the job and reconnect:"
 echo ""
-echo "   ./reconnect_hpc_jupyter.sh -H ${HPC_HOST}"
+echo "   ./reconnect_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
 echo ""
 echo "STEP 3: When finished, stop everything with:"
 echo ""
