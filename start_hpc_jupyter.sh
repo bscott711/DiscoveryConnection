@@ -195,6 +195,15 @@ elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
     module load matlab/R2023b
 fi
 
+# --- START MATLAB ENV FIX ---
+# Manually set the environment variables from your .bashrc
+# This is required because sbatch doesn't load .bashrc or activate
+echo "✅ [sbatch] Manually setting MATLAB environment variables..."
+MATLAB_ROOT="/cm/shared/apps_local/matlab/R2024B"
+export LD_LIBRARY_PATH="\${MATLAB_ROOT}/runtime/glnxa64:\${MATLAB_ROOT}/bin/glnxa64:\${MATLAB_ROOT}/sys/os/glnxa64:\${MATLAB_ROOT}/sys/opengl/lib/glnxa64:\${LD_LIBRARY_PATH}"
+export MW_MCR_ROOT="\${MATLAB_ROOT}"
+# --- END MATLAB ENV FIX ---
+
 # --- Extend Python's Path ---
 # Instead of activating the venv, which conflicts with conda,
 # just add its site-packages to the PYTHONPATH.
