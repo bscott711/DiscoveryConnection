@@ -164,7 +164,7 @@ HPC_HOST_PASSED="${HPC_HOST}"
 ENV_NAME_PASSED="${ENV_NAME}"
 # Path to the venv's site-packages
 VENV_SITE_PACKAGES="\$HOME/\${ENV_NAME_PASSED}/lib/python3.11/site-packages"
-# Path to your local software directory (where run_petakit_server.m lives)
+# Path to your local software directory (root folder)
 SOFTWARE_PATH="\$HOME/software"
 
 # --- Use the variables ---
@@ -184,7 +184,6 @@ elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
 fi
 
 # --- START MATLAB ENV FIX ---
-# Manually set the environment variables from your .bashrc for Python/Compiled wrapper
 echo "✅ [sbatch] Manually setting MATLAB environment variables..."
 MATLAB_ROOT="/cm/shared/apps_local/matlab/R2024B"
 export LD_LIBRARY_PATH="\${MATLAB_ROOT}/runtime/glnxa64:\${MATLAB_ROOT}/bin/glnxa64:\${MATLAB_ROOT}/sys/os/glnxa64:\${MATLAB_ROOT}/sys/opengl/lib/glnxa64:\${LD_LIBRARY_PATH}"
@@ -198,12 +197,16 @@ export PYTHONPATH="\${VENV_SITE_PACKAGES}:\${SOFTWARE_PATH}:\${PYTHONPATH}"
 
 # --- START PETAKIT SERVER ---
 echo "🚀 Launching persistent MATLAB server in background..."
-# Ensure MATLAB can find run_petakit_server.m in your software folder
-export MATLABPATH="\${SOFTWARE_PATH}:\${MATLABPATH}"
+# We define the log file variable inside the script to ensure it captures the runtime Job ID
+LOG_NAME="matlab-server-\${SLURM_JOB_ID}.log"
+LOG_PATH="\$HOME/logs/\$LOG_NAME"
 
-# Run MATLAB headlessly in the background (&), logging to ~/logs
-# The server script will auto-detect SLURM_CPUS_PER_TASK
-nohup matlab -nodisplay -nosplash -r "addpath(genpath('${SOFTWARE_PATH}')); try, run_petakit_server; catch ME, disp(getReport(ME)); exit(1); end" > ~/logs/matlab-server-${SLURM_JOB_ID}.log 2>&1 &
+echo "   Server log will be at: \$LOG_PATH"
+
+# Run MATLAB headlessly. 
+# 1. addpath(genpath(...)) recursively adds SOFTWARE_PATH/opym and others.
+# 2. try/catch block prints errors if it fails to start.
+nohup matlab -nodisplay -nosplash -r "addpath(genpath('\${SOFTWARE_PATH}')); try, run_petakit_server; catch ME, disp(getReport(ME)); exit(1); end" > \$LOG_PATH 2>&1 &
 # --- END PETAKIT SERVER ---
 
 echo "Launching JupyterLab..."
@@ -264,21 +267,15 @@ echo "------------------------------------------------------------------"
 echo "✅ A new terminal window has opened and is running your SSH tunnel."
 echo "   You can safely close this original window."
 echo ""
-echo "STEP 1: If it didn't open automatically, copy this URL into your browser:"
+echo "   Jupyter Log:       ~/logs/${JOB_NAME}-${JOB_ID}.log"
+echo "   MATLAB Server Log: ~/logs/matlab-server-${JOB_ID}.log"
 echo ""
+echo "STEP 1: If it didn't open automatically, copy this URL:"
 echo "   ${FINAL_URL}"
 echo ""
-echo "STEP 2: If you close your laptop or the tunnel breaks, run this"
-echo "        script to find the job and reconnect:"
-echo ""
+echo "STEP 2: To Reconnect (if tunnel breaks):"
 echo "   ./reconnect_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
 echo ""
-echo "STEP 3: When finished, stop everything with:"
-echo ""
+echo "STEP 3: To Stop Everything (Clean up):"
 echo "   ./kill_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
-echo ""
-echo "DEBUG: To check the status of the background MATLAB server:"
-echo ""
-echo "   ssh ${HPC_HOST} 'cat ~/logs/matlab-server-${JOB_ID}.log'"
 echo "------------------------------------------------------------------"
-
