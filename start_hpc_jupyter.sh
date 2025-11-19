@@ -203,7 +203,7 @@ export MATLABPATH="\${SOFTWARE_PATH}:\${MATLABPATH}"
 
 # Run MATLAB headlessly in the background (&), logging to ~/logs
 # The server script will auto-detect SLURM_CPUS_PER_TASK
-nohup matlab -nodisplay -nosplash -r "try, run_petakit_server, catch, exit, end" > ~/logs/matlab-server-\${SLURM_JOB_ID}.log 2>&1 &
+nohup matlab -nodisplay -nosplash -r "try, run_petakit_server; catch ME, disp(getReport(ME)); exit(1); end" > ~/logs/matlab-server-${SLURM_JOB_ID}.log 2>&1 &
 # --- END PETAKIT SERVER ---
 
 echo "Launching JupyterLab..."
@@ -276,4 +276,9 @@ echo ""
 echo "STEP 3: When finished, stop everything with:"
 echo ""
 echo "   ./kill_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
+echo ""
+echo "DEBUG: To check the status of the background MATLAB server:"
+echo ""
+echo "   ssh ${HPC_HOST} 'cat ~/logs/matlab-server-${JOB_ID}.log'"
 echo "------------------------------------------------------------------"
+
