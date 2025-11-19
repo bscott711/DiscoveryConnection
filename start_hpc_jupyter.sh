@@ -2,6 +2,7 @@
 #
 # A script to start JupyterLab on the HPC, automatically create the
 # local SSH tunnel, and open the URL in the default browser.
+# This also starts a persistent, headless MATLAB server for PetaKit jobs.
 #
 
 # --- Configuration & Defaults ---
@@ -63,7 +64,6 @@ show_usage() {
 }
 
 # --- Argument Parsing ---
-# This loop processes arguments in any order
 while [[ $# -gt 0 ]]; do
     key="$1"
     case $key in
@@ -73,40 +73,33 @@ while [[ $# -gt 0 ]]; do
             ;;
         -H|--host)
             HPC_HOST="$2"
-            shift # past argument
-            shift # past value
+            shift; shift
             ;;
         -e|--env)
             ENV_NAME="$2"
-            shift # past argument
-            shift # past value
+            shift; shift
             ;;
         -p|--partition)
             PARTITION="$2"
-            shift # past argument
-            shift # past value
+            shift; shift
             ;;
         -m|--mem)
             MEMORY="$2"
-            shift # past argument
-            shift # past value
+            shift; shift
             ;;
         -t|--time)
             TIME="$2"
-            shift # past argument
-            shift # past value
+            shift; shift
             ;;
         -c|--cpus)
             CPUS="$2"
-            shift # past argument
-            shift # past value
+            shift; shift
             ;;
         -g|--gres)
             GRES="$2"
-            shift # past argument
-            shift # past value
+            shift; shift
             ;;
-        *)    # unknown option
+        *) 
             echo "❌ Error: Unknown option: $1"
             show_usage
             exit 1
@@ -116,9 +109,7 @@ done
 
 # --- Validate Host ---
 case "$HPC_HOST" in
-    Discovery|Innovator)
-        # Valid, do nothing
-        ;;
+    Discovery|Innovator) ;;
     *)
         echo "❌ Error: Invalid host '$HPC_HOST'."
         echo "Please use 'Discovery' or 'Innovator'."
@@ -131,12 +122,12 @@ LOCAL_PORT=$(find_available_port $LOCAL_PORT)
 echo "🌐 Using local port: ${LOCAL_PORT}"
 
 # --- Final variable prep ---
-MEMORY_GB="${MEMORY}G" # Add the 'G' for sbatch
-JOB_NAME="jupyter-${ENV_NAME}" # Dynamic job name
+MEMORY_GB="${MEMORY}G"
+JOB_NAME="jupyter-${ENV_NAME}"
 
 echo "🚀 Starting job with settings:"
 echo "   Host:         ${HPC_HOST}"
-echo "   Environment:  ${ENV_NAME} (at ~/${ENV_NAME}/bin/activate)"
+echo "   Environment:  ${ENV_NAME}"
 echo "   Partition:    ${PARTITION}"
 echo "   Memory:       ${MEMORY_GB}"
 echo "   Time:         ${TIME}"
@@ -169,14 +160,12 @@ export node=\$(hostname -s)
 export port=\$((8000 + RANDOM % 2000))
 
 # --- Define variables for logic ---
-# These are "baked in" by the local shell
 HPC_HOST_PASSED="${HPC_HOST}"
 ENV_NAME_PASSED="${ENV_NAME}"
 # Path to the venv's site-packages
 VENV_SITE_PACKAGES="\$HOME/\${ENV_NAME_PASSED}/lib/python3.11/site-packages"
-# Path to your local software directory
+# Path to your local software directory (where run_petakit_server.m lives)
 SOFTWARE_PATH="\$HOME/software"
-
 
 # --- Use the variables ---
 echo "Preparing JupyterLab on node \$node, port \$port"
@@ -184,7 +173,6 @@ echo "Running on cluster: \${HPC_HOST_PASSED}"
 echo "Using environment: ${ENV_NAME}"
 
 # --- Module Loading ---
-# Load base modules first
 echo "Loading PyPetaKit5D module (for jupyter)..."
 module load pypetakit5d
 
@@ -196,8 +184,7 @@ elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
 fi
 
 # --- START MATLAB ENV FIX ---
-# Manually set the environment variables from your .bashrc
-# This is required because sbatch doesn't load .bashrc or activate
+# Manually set the environment variables from your .bashrc for Python/Compiled wrapper
 echo "✅ [sbatch] Manually setting MATLAB environment variables..."
 MATLAB_ROOT="/cm/shared/apps_local/matlab/R2024B"
 export LD_LIBRARY_PATH="\${MATLAB_ROOT}/runtime/glnxa64:\${MATLAB_ROOT}/bin/glnxa64:\${MATLAB_ROOT}/sys/os/glnxa64:\${MATLAB_ROOT}/sys/opengl/lib/glnxa64:\${LD_LIBRARY_PATH}"
@@ -205,15 +192,21 @@ export MW_MCR_ROOT="\${MATLAB_ROOT}"
 # --- END MATLAB ENV FIX ---
 
 # --- Extend Python's Path ---
-# Instead of activating the venv, which conflicts with conda,
-# just add its site-packages to the PYTHONPATH.
 echo "Injecting venv packages from \${VENV_SITE_PACKAGES}"
 echo "Injecting local projects from \${SOFTWARE_PATH}"
 export PYTHONPATH="\${VENV_SITE_PACKAGES}:\${SOFTWARE_PATH}:\${PYTHONPATH}"
 
+# --- START PETAKIT SERVER ---
+echo "🚀 Launching persistent MATLAB server in background..."
+# Ensure MATLAB can find run_petakit_server.m in your software folder
+export MATLABPATH="\${SOFTWARE_PATH}:\${MATLABPATH}"
+
+# Run MATLAB headlessly in the background (&), logging to ~/logs
+# The server script will auto-detect SLURM_CPUS_PER_TASK
+nohup matlab -nodisplay -nosplash -r "try, run_petakit_server, catch, exit, end" > ~/logs/matlab-server-\${SLURM_JOB_ID}.log 2>&1 &
+# --- END PETAKIT SERVER ---
+
 echo "Launching JupyterLab..."
-# Run the base module's python, which can now find your
-# packages (like jupyter-matlab-proxy) via PYTHONPATH.
 python -m jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
 SBATCH_SCRIPT
 )
@@ -225,7 +218,6 @@ if [ -z "$JOB_ID" ]; then
 fi
 
 echo "✅ Job submitted with ID: ${JOB_ID}"
-# Use the dynamic log file name, now inside the 'logs' folder
 LOG_FILE="logs/${JOB_NAME}-${JOB_ID}.log"
 echo "⏳ Waiting for job to start and URL to be ready (checking ~/${LOG_FILE})..."
 
