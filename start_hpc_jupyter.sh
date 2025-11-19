@@ -203,7 +203,7 @@ export MATLABPATH="\${SOFTWARE_PATH}:\${MATLABPATH}"
 
 # Run MATLAB headlessly in the background (&), logging to ~/logs
 # The server script will auto-detect SLURM_CPUS_PER_TASK
-nohup matlab -nodisplay -nosplash -r "try, run_petakit_server; catch ME, disp(getReport(ME)); exit(1); end" > ~/logs/matlab-server-${SLURM_JOB_ID}.log 2>&1 &
+nohup matlab -nodisplay -nosplash -r "addpath(genpath('${SOFTWARE_PATH}')); try, run_petakit_server; catch ME, disp(getReport(ME)); exit(1); end" > ~/logs/matlab-server-${SLURM_JOB_ID}.log 2>&1 &
 # --- END PETAKIT SERVER ---
 
 echo "Launching JupyterLab..."
