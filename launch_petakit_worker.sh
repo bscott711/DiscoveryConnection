@@ -1,22 +1,33 @@
 #!/bin/bash
 #
-# A local script to launch the persistent MATLAB PetaKit worker on the HPC.
-# Run this from your laptop/desktop.
+# Smart launcher for the persistent MATLAB PetaKit worker.
+# Automatically handles environment differences between clusters.
 #
 
 # --- Defaults ---
 HPC_HOST="Discovery"
-PARTITION="compute"
+PARTITION="gpu"
 CPUS="48"
-MEMORY="250" # GB
-TIME="2-00:00:00" # 2 Days
+MEMORY="250"
+TIME="2-00:00:00"
 GRES="gpu:0"
+PETAKIT_PATH="/cm/shared/apps_local/petakit5d" # Default shared path
+
+# --- Configuration Maps (Host -> Settings) ---
+# You can add more hosts here in the future
+declare -A MATLAB_MODULES
+MATLAB_MODULES["Discovery"]="matlab/R2024b"
+MATLAB_MODULES["Innovator"]="matlab/R2023b"
+
+declare -A MATLAB_ROOTS
+MATLAB_ROOTS["Discovery"]="/cm/shared/apps_local/matlab/R2024B"
+MATLAB_ROOTS["Innovator"]="/cm/shared/apps_local/matlab/R2023b"
 
 # --- Help Function ---
 show_usage() {
     echo "Usage: $0 [options]"
     echo ""
-    echo "Launches a headless MATLAB worker on the cluster to process PetaKit jobs."
+    echo "Launches a headless MATLAB worker on the cluster."
     echo ""
     echo "Options:"
     echo "  -H, --host <Host>       HPC host (Default: ${HPC_HOST})"
@@ -25,6 +36,8 @@ show_usage() {
     echo "  -m, --mem <Memory>      Memory in GB (Default: ${MEMORY})"
     echo "  -t, --time <Time>       Job time limit (Default: ${TIME})"
     echo "  -g, --gres <GRES>       GPU resources (Default: ${GRES})"
+    echo "  -k, --kit-path <Path>   Path to PetaKit5D on the cluster"
+    echo "                          (Default: ${PETAKIT_PATH})"
     echo "  -h, --help              Show this help message"
     echo ""
 }
@@ -40,18 +53,31 @@ while [[ $# -gt 0 ]]; do
         -m|--mem) MEMORY="$2"; shift; shift ;;
         -t|--time) TIME="$2"; shift; shift ;;
         -g|--gres) GRES="$2"; shift; shift ;;
+        -k|--kit-path) PETAKIT_PATH="$2"; shift; shift ;;
         *) echo "❌ Unknown option: $1"; show_usage; exit 1 ;;
     esac
 done
+
+# --- Validation & Lookup ---
+TARGET_MODULE="${MATLAB_MODULES[$HPC_HOST]}"
+TARGET_ROOT="${MATLAB_ROOTS[$HPC_HOST]}"
+
+if [ -z "$TARGET_MODULE" ]; then
+    echo "❌ Error: Unknown host '$HPC_HOST'. No MATLAB config found."
+    echo "   Available hosts: ${!MATLAB_MODULES[@]}"
+    exit 1
+fi
 
 MEMORY_GB="${MEMORY}G"
 JOB_NAME="petakit-worker"
 
 echo "🚀 Launching PetaKit Worker on ${HPC_HOST}..."
-echo "   CPUs: ${CPUS} | Mem: ${MEMORY_GB} | Time: ${TIME}"
+echo "   Config:  ${TARGET_MODULE}"
+echo "   PetaKit: ${PETAKIT_PATH}"
+echo "   Resources: ${CPUS} CPUs, ${MEMORY_GB} Mem, ${TIME}"
 
 # --- Remote Execution ---
-# We construct the SBATCH script here and pipe it via SSH
+# We pipe the script via SSH, injecting the resolved paths
 JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_EOF
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
@@ -63,34 +89,31 @@ JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_EOF
 #SBATCH --output=logs/worker-%j.log
 #SBATCH --open-mode=truncate
 
-# --- Define Variables ---
-HPC_HOST_PASSED="${HPC_HOST}"
-SOFTWARE_PATH="\$HOME/software"
-
-echo "Starting Worker on \$(hostname)"
-echo "Cluster: \${HPC_HOST_PASSED}"
+# --- Export Variables for MATLAB ---
+# This allows run_petakit_server.m to find PetaKit without hardcoding
+export PETAKIT_ROOT="${PETAKIT_PATH}"
+export SLURM_CPUS_PER_TASK=${CPUS} # Ensure this is set for the script logic
 
 # --- Module Loading ---
+echo "Loading modules..."
 module load pypetakit5d
-
-# Host-Specific Logic
-if [[ "\${HPC_HOST_PASSED}" == "Discovery" ]]; then
-    module load matlab/R2024b
-elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
-    module load matlab/R2023b
-fi
+module load ${TARGET_MODULE}
 
 # --- MATLAB Environment Fix ---
-echo "✅ Setting up MATLAB environment..."
-MATLAB_ROOT="/cm/shared/apps_local/matlab/R2024B"
+echo "✅ Setting up MATLAB environment for ${HPC_HOST}..."
+MATLAB_ROOT="${TARGET_ROOT}"
 export LD_LIBRARY_PATH="\${MATLAB_ROOT}/runtime/glnxa64:\${MATLAB_ROOT}/bin/glnxa64:\${MATLAB_ROOT}/sys/os/glnxa64:\${MATLAB_ROOT}/sys/opengl/lib/glnxa64:\${LD_LIBRARY_PATH}"
 export MW_MCR_ROOT="\${MATLAB_ROOT}"
 
 # --- Launch Server ---
 echo "🚀 Launching MATLAB server (blocking)..."
+SOFTWARE_PATH="\$HOME/software"
+
+# Add software path to MATLAB's search path
 export MATLABPATH="\${SOFTWARE_PATH}:\${MATLABPATH}"
 
-# Run blocking (no '&') so Slurm keeps the allocation alive
+# Run blocking
+# Note: We rely on the server script using getenv('PETAKIT_ROOT')
 matlab -nodisplay -nosplash -r "addpath(genpath('\${SOFTWARE_PATH}')); try, run_petakit_server; catch ME, disp(getReport(ME)); exit(1); end; exit;"
 
 echo "🛑 Server exited."
@@ -106,5 +129,9 @@ echo "✅ Worker submitted successfully!"
 echo "   Job ID:  ${JOB_ID}"
 echo "   Log:     ~/logs/worker-${JOB_ID}.log"
 echo ""
-echo "To check status run locally:"
+echo "To check status:"
 echo "   ssh ${HPC_HOST} 'squeue -j ${JOB_ID}'"
+echo ""
+echo "To stop:"
+echo "   ssh ${HPC_HOST} 'scancel ${JOB_ID}'"
+echo
