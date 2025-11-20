@@ -2,26 +2,17 @@
 #
 # Smart launcher for the persistent MATLAB PetaKit worker.
 # Automatically handles environment differences between clusters.
+# Compatible with macOS (Bash 3.2) and Linux.
 #
 
 # --- Defaults ---
 HPC_HOST="Discovery"
-PARTITION="gpu"
+PARTITION="compute"
 CPUS="48"
 MEMORY="250"
 TIME="2-00:00:00"
 GRES="gpu:0"
 PETAKIT_PATH="/cm/shared/apps_local/petakit5d" # Default shared path
-
-# --- Configuration Maps (Host -> Settings) ---
-# You can add more hosts here in the future
-declare -A MATLAB_MODULES
-MATLAB_MODULES["Discovery"]="matlab/R2024b"
-MATLAB_MODULES["Innovator"]="matlab/R2023b"
-
-declare -A MATLAB_ROOTS
-MATLAB_ROOTS["Discovery"]="/cm/shared/apps_local/matlab/R2024B"
-MATLAB_ROOTS["Innovator"]="/cm/shared/apps_local/matlab/R2023b"
 
 # --- Help Function ---
 show_usage() {
@@ -58,15 +49,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --- Validation & Lookup ---
-TARGET_MODULE="${MATLAB_MODULES[$HPC_HOST]}"
-TARGET_ROOT="${MATLAB_ROOTS[$HPC_HOST]}"
-
-if [ -z "$TARGET_MODULE" ]; then
-    echo "❌ Error: Unknown host '$HPC_HOST'. No MATLAB config found."
-    echo "   Available hosts: ${!MATLAB_MODULES[@]}"
-    exit 1
-fi
+# --- Configuration Lookup ---
+case "$HPC_HOST" in
+    "Discovery")
+        TARGET_MODULE="matlab/R2024b"
+        TARGET_ROOT="/cm/shared/apps_local/matlab/R2024b"
+        ;;
+    "Innovator")
+        TARGET_MODULE="matlab/R2023b"
+        TARGET_ROOT="/cm/shared/apps_local/matlab/R2023b"
+        ;;
+    *)
+        echo "❌ Error: Unknown host '$HPC_HOST'. No MATLAB config found."
+        exit 1
+        ;;
+esac
 
 MEMORY_GB="${MEMORY}G"
 JOB_NAME="petakit-worker"
@@ -92,7 +89,7 @@ JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_EOF
 # --- Export Variables for MATLAB ---
 # This allows run_petakit_server.m to find PetaKit without hardcoding
 export PETAKIT_ROOT="${PETAKIT_PATH}"
-export SLURM_CPUS_PER_TASK=${CPUS} # Ensure this is set for the script logic
+export SLURM_CPUS_PER_TASK=${CPUS} 
 
 # --- Module Loading ---
 echo "Loading modules..."
@@ -113,7 +110,6 @@ SOFTWARE_PATH="\$HOME/software"
 export MATLABPATH="\${SOFTWARE_PATH}:\${MATLABPATH}"
 
 # Run blocking
-# Note: We rely on the server script using getenv('PETAKIT_ROOT')
 matlab -nodisplay -nosplash -r "addpath(genpath('\${SOFTWARE_PATH}')); try, run_petakit_server; catch ME, disp(getReport(ME)); exit(1); end; exit;"
 
 echo "🛑 Server exited."
@@ -131,7 +127,7 @@ echo "   Log:     ~/logs/worker-${JOB_ID}.log"
 echo ""
 echo "To check status:"
 echo "   ssh ${HPC_HOST} 'squeue -j ${JOB_ID}'"
+
 echo ""
 echo "To stop:"
 echo "   ssh ${HPC_HOST} 'scancel ${JOB_ID}'"
-echo
