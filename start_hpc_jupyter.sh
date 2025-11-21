@@ -8,11 +8,11 @@
 LOCAL_PORT="9999"
 HPC_HOST="Discovery"
 ENV_NAME="ppk5d" # Default personal venv name
-PARTITION="gpu"
-MEMORY="128"
-TIME="08:00:00"
-CPUS="8"
-GRES="gpu:1"
+PARTITION="compute"
+MEMORY="8"
+TIME="12:00:00"
+CPUS="1"
+GRES="gpu:0"
 
 # --- Function to find available local port ---
 find_available_port() {
