@@ -96,6 +96,12 @@ echo "Loading modules..."
 module load pypetakit5d
 module load ${TARGET_MODULE}
 
+# --- CRITICAL FIX: Capture Correct Python Path ---
+# 1. We use '\$(...)' to escape the command.
+# 2. This ensures 'which python' runs ON THE CLUSTER NODE, *after* modules load.
+# 3. This captures .../ppk5d/.../python instead of the system python.
+export OPYM_PYTHON=\$(which python)
+
 # --- MATLAB Environment Fix ---
 echo "✅ Setting up MATLAB environment for ${HPC_HOST}..."
 MATLAB_ROOT="${TARGET_ROOT}"
