@@ -1,26 +1,46 @@
+import argparse
 import os
-import PyPetaKit5D as ppk # type: ignore
+import PyPetaKit5D as ppk  # type: ignore
 
-# --- Configuration ---
-home_dir = "/home/SDSMT.LOCAL/bscott"
-config_file_path = os.path.join(home_dir, "pypetakit_config.json")
-mcr_root = "/cm/shared/apps_local/matlab/R2024B"
-mcc_master_script = "/mmfs2/cm/shared/apps_local/petakit5d/mcc/linux/run_mccMaster.sh"
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate PyPetaKit5D cluster config JSON."
+    )
+    parser.add_argument(
+        "--output",
+        default=os.path.expanduser("~/pypetakit_config.json"),
+        help="Path to write config JSON (default: ~/pypetakit_config.json)",
+    )
+    parser.add_argument(
+        "--mcr-root",
+        default="/cm/shared/apps_local/matlab/R2024B",
+        help="MATLAB MCR root on the cluster.",
+    )
+    parser.add_argument(
+        "--mcc-master-script",
+        default="/mmfs2/cm/shared/apps_local/petakit5d/mcc/linux/run_mccMaster.sh",
+        help="Path to run_mccMaster.sh on the cluster.",
+    )
+    parser.add_argument("--mem-per-cpu", type=float, default=5.0)
+    parser.add_argument("--job-time-limit", type=int, default=48)
+    parser.add_argument("--max-cpus", type=int, default=48)
 
-print("--- This is the LOCAL config generator ---")
-print(f"It will create {config_file_path} on the HPC.")
+    args = parser.parse_args()
 
-ppk.generate_config_file(
-    config_file_path,
-    MCCMasterStr=mcc_master_script,
-    MCRParam=mcr_root,
-    memPerCPU=5.0,      # Adjusted: ~5GB per CPU (240GB total)
-    jobTimeLimit=48,
-    maxCPUNum=48,       # <-- Request 48 CPU cores
-    GNUparallel=True,
-    masterCompute=True, # Run locally on the allocated node
-    parseCluster=False, # Do NOT submit sub-jobs
-    SlurmParam=""
-)
+    print(f"Generating config at {args.output} for MCR={args.mcr_root}")
+    ppk.generate_config_file(
+        args.output,
+        MCCMasterStr=args.mcc_master_script,
+        MCRParam=args.mcr_root,
+        memPerCPU=args.mem_per_cpu,
+        jobTimeLimit=args.job_time_limit,
+        maxCPUNum=args.max_cpus,
+        GNUparallel=True,
+        masterCompute=True,
+        parseCluster=False,
+        SlurmParam="",
+    )
+    print(f"✅ Config saved to {args.output}")
 
-print(f"✅ Config saved to {config_file_path}")
+if __name__ == "__main__":
+    main()

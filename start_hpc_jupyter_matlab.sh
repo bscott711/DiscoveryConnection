@@ -1,127 +1,65 @@
 #!/bin/bash
+# start_hpc_jupyter_matlab.sh
 #
-# A script to start JupyterLab on the HPC, automatically create the
-# local SSH tunnel, and open the URL in the default browser.
-# This also starts a persistent, headless MATLAB server for PetaKit jobs.
-#
+# Starts JupyterLab on the HPC with a persistent MATLAB server for PetaKit.
 
 # --- Configuration & Defaults ---
 LOCAL_PORT="9999"
 HPC_HOST="Discovery"
-ENV_NAME="ppk5d" # Default personal venv name
+ENV_NAME="ppk5d"
 PARTITION="gpu"
 MEMORY="128"
 TIME="08:00:00"
 CPUS="8"
 GRES="gpu:1"
 
-# --- Function to find available local port ---
-find_available_port() {
-    local base_port=$1
-    local max_attempts=50
-    local attempt=0
-    
-    while [ $attempt -lt $max_attempts ]; do
-        local port_to_check
-        if [ $attempt -eq 0 ]; then
-            port_to_check=$base_port
-        else
-            # For subsequent attempts, use random ports in range
-            port_to_check=$((8000 + RANDOM % 2000))
-        fi
-        
-        # Check if port is available locally
-        if ! lsof -Pi :$port_to_check -sTCP:LISTEN -t >/dev/null 2>&1; then
-            echo $port_to_check
-            return 0
-        fi
-        attempt=$((attempt + 1))
-    done
-    
-    echo "❌ Error: Could not find an available local port after $max_attempts attempts"
-    exit 1
-}
+# Source common utilities
+source "$(dirname "$0")/hpc_common.sh"
 
 # --- Help Function ---
 show_usage() {
     echo "Usage: $0 [options]"
     echo ""
-    echo "Starts a JupyterLab session on the HPC, creates an SSH tunnel, and opens it."
+    echo "Starts a JupyterLab session + MATLAB server on the HPC."
     echo ""
     echo "Options:"
     echo "  -H, --host <Host>       HPC host (Default: ${HPC_HOST})"
-    echo "                          Options: Discovery, Innovator"
-    echo "  -e, --env <Env>         Your personal venv name (Default: ${ENV_NAME})"
+    echo "  -e, --env <Env>         Your venv name (Default: ${ENV_NAME})"
     echo "  -p, --partition <Part>  Slurm partition (Default: ${PARTITION})"
-    echo "  -m, --mem <Memory>      Memory to request in GB (Default: ${MEMORY})"
+    echo "  -m, --mem <Memory>      Memory in GB (Default: ${MEMORY})"
     echo "  -t, --time <Time>       Job time limit (Default: ${TIME})"
     echo "  -c, --cpus <CPUs>       Number of CPU cores (Default: ${CPUS})"
     echo "  -g, --gres <GRES>       GPU resources (Default: ${GRES})"
-    echo "  -h, --help              Show this help message and exit"
-    echo ""
-    echo "Example:"
-    echo "  $0 -p all-gpu -m 64 -t 08:00:00 -c 16 -g gpu:2"
+    echo "  -h, --help              Show help"
 }
 
 # --- Argument Parsing ---
 while [[ $# -gt 0 ]]; do
     key="$1"
     case $key in
-        -h|--help)
-            show_usage
-            exit 0
-            ;;
-        -H|--host)
-            HPC_HOST="$2"
-            shift; shift
-            ;;
-        -e|--env)
-            ENV_NAME="$2"
-            shift; shift
-            ;;
-        -p|--partition)
-            PARTITION="$2"
-            shift; shift
-            ;;
-        -m|--mem)
-            MEMORY="$2"
-            shift; shift
-            ;;
-        -t|--time)
-            TIME="$2"
-            shift; shift
-            ;;
-        -c|--cpus)
-            CPUS="$2"
-            shift; shift
-            ;;
-        -g|--gres)
-            GRES="$2"
-            shift; shift
-            ;;
-        *) 
-            echo "❌ Error: Unknown option: $1"
-            show_usage
-            exit 1
-            ;;
+        -h|--help) show_usage; exit 0 ;;
+        -H|--host) HPC_HOST="$2"; shift; shift ;;
+        -e|--env) ENV_NAME="$2"; shift; shift ;;
+        -p|--partition) PARTITION="$2"; shift; shift ;;
+        -m|--mem) MEMORY="$2"; shift; shift ;;
+        -t|--time) TIME="$2"; shift; shift ;;
+        -c|--cpus) CPUS="$2"; shift; shift ;;
+        -g|--gres) GRES="$2"; shift; shift ;;
+        *) echo "❌ Error: Unknown option: $1"; show_usage; exit 1 ;;
     esac
 done
 
-# --- Validate Host ---
-case "$HPC_HOST" in
-    Discovery|Innovator) ;;
-    *)
-        echo "❌ Error: Invalid host '$HPC_HOST'."
-        echo "Please use 'Discovery' or 'Innovator'."
-        exit 1
-        ;;
-esac
+# --- Validation ---
+validate_host "$HPC_HOST" || exit 1
 
-# --- Find an available local port ---
-LOCAL_PORT=$(find_available_port $LOCAL_PORT)
+# --- MATLAB Configuration ---
+IFS=':' read -r MATLAB_MODULE MATLAB_ROOT <<< "$(get_matlab_config "$HPC_HOST")"
+
+# --- Find Local Port ---
+LOCAL_PORT=$(find_available_port $LOCAL_PORT) || exit 1
 echo "🌐 Using local port: ${LOCAL_PORT}"
 
-# --- Final variable prep ---
+# --- Final Prep ---
 MEMORY_GB="${MEMORY}G"
 JOB_NAME="jupyter-${ENV_NAME}"
 
@@ -134,14 +72,14 @@ echo "   Time:         ${TIME}"
 echo "   CPUs:         ${CPUS}"
 echo "   GPUs:         ${GRES}"
 
-
 # --- Main Logic ---
-echo "📁 Ensuring 'logs' directory exists on ${HPC_HOST}..."
+echo "📁 Ensuring 'logs' directory exists..."
 ssh ${HPC_HOST} "mkdir -p ~/logs"
 
-echo "⏳ Submitting JupyterLab job to ${HPC_HOST}..."
+echo "⏳ Submitting JupyterLab + MATLAB job..."
 
-# --- (JOB SUBMISSION BLOCK) ---
+MATLAB_ENV_SETUP=$(get_matlab_env_setup "$MATLAB_ROOT")
+
 JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_SCRIPT
 #!/bin/bash
 #SBATCH --job-name=${JOB_NAME}
@@ -155,65 +93,37 @@ JOB_ID=$(ssh ${HPC_HOST} "sbatch --parsable" <<SBATCH_SCRIPT
 
 unset XDG_RUNTIME_DIR
 
-# --- Define compute-node variables ---
+# --- Compute-node variables ---
 export node=\$(hostname -s)
 export port=\$((8000 + RANDOM % 2000))
 
-# --- Define variables for logic ---
-HPC_HOST_PASSED="${HPC_HOST}"
 ENV_NAME_PASSED="${ENV_NAME}"
-# Path to the venv's site-packages
-VENV_SITE_PACKAGES="\$HOME/\${ENV_NAME_PASSED}/lib/python3.11/site-packages"
-# Path to your local software directory (root folder)
 SOFTWARE_PATH="\$HOME/software"
 
-# --- Use the variables ---
-echo "Preparing JupyterLab on node \$node, port \$port"
-echo "Running on cluster: \${HPC_HOST_PASSED}"
-echo "Using environment: ${ENV_NAME}"
-
 # --- Module Loading ---
-echo "Loading PyPetaKit5D module (for jupyter)..."
 module load pypetakit5d
+module load ${MATLAB_MODULE}
 
-echo "Loading MATLAB module..."
-if [[ "\${HPC_HOST_PASSED}" == "Discovery" ]]; then
-    module load matlab/R2024b
-elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
-    module load matlab/R2023b
-fi
+# --- MATLAB ENV FIX ---
+${MATLAB_ENV_SETUP}
 
-# --- START MATLAB ENV FIX ---
-echo "✅ [sbatch] Manually setting MATLAB environment variables..."
-MATLAB_ROOT="/cm/shared/apps_local/matlab/R2024B"
-export LD_LIBRARY_PATH="\${MATLAB_ROOT}/runtime/glnxa64:\${MATLAB_ROOT}/bin/glnxa64:\${MATLAB_ROOT}/sys/os/glnxa64:\${MATLAB_ROOT}/sys/opengl/lib/glnxa64:\${LD_LIBRARY_PATH}"
-export MW_MCR_ROOT="\${MATLAB_ROOT}"
-# --- END MATLAB ENV FIX ---
-
-# --- Extend Python's Path ---
-echo "Injecting venv packages from \${VENV_SITE_PACKAGES}"
+# --- Python Isolation & Path ---
 echo "Injecting local projects from \${SOFTWARE_PATH}"
-export PYTHONPATH="\${VENV_SITE_PACKAGES}:\${SOFTWARE_PATH}:\${PYTHONPATH}"
+export PYTHONPATH="\${SOFTWARE_PATH}:\${PYTHONPATH}"
+export PATH="\$HOME/\${ENV_NAME_PASSED}/bin:\$PATH"
 
 # --- START PETAKIT SERVER ---
 echo "🚀 Launching persistent MATLAB server in background..."
-# We define the log file variable inside the script to ensure it captures the runtime Job ID
-LOG_NAME="matlab-server-\${SLURM_JOB_ID}.log"
-LOG_PATH="\$HOME/logs/\$LOG_NAME"
+LOG_PATH="\$HOME/logs/matlab-server-\${SLURM_JOB_ID}.log"
 
-echo "   Server log will be at: \$LOG_PATH"
-
-# Run MATLAB headlessly. 
-# 1. addpath(genpath(...)) recursively adds SOFTWARE_PATH/opym and others.
-# 2. try/catch block prints errors if it fails to start.
+# Run MATLAB headlessly
 nohup matlab -nodisplay -nosplash -r "addpath(genpath('\${SOFTWARE_PATH}')); try, run_petakit_server; catch ME, disp(getReport(ME)); exit(1); end" > \$LOG_PATH 2>&1 &
 # --- END PETAKIT SERVER ---
 
-echo "Launching JupyterLab..."
-python -m jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
+echo "Launching JupyterLab on node \$node, port \$port..."
+\$HOME/\${ENV_NAME_PASSED}/bin/python -m jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
 SBATCH_SCRIPT
 )
-# --- (End of job submission block) ---
 
 if [ -z "$JOB_ID" ]; then
     echo "❌ Failed to submit job. Exiting."
@@ -222,60 +132,41 @@ fi
 
 echo "✅ Job submitted with ID: ${JOB_ID}"
 LOG_FILE="logs/${JOB_NAME}-${JOB_ID}.log"
-echo "⏳ Waiting for job to start and URL to be ready (checking ~/${LOG_FILE})..."
+echo "⏳ Waiting for job to start..."
 
 while true;
 do
     STATUS=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o %T" 2>/dev/null) || STATUS="UNKNOWN"
     if [[ "$STATUS" != "PENDING" && "$STATUS" != "RUNNING" ]]; then
-        echo "❌ Job ${JOB_ID} is no longer running (status: $STATUS). Check output with:"
-        echo "   ssh ${HPC_HOST} 'cat ~/${LOG_FILE}'"
+        echo "❌ Job ${JOB_ID} is no longer running. Check ~/${LOG_FILE}"
         exit 1
     fi
-    if ssh ${HPC_HOST} "[ -f ~/${LOG_FILE} ]"; then
-        if ssh ${HPC_HOST} "grep -q 'http://127.0.0.1' ~/${LOG_FILE}"; then
-            break
-        fi
+    if ssh ${HPC_HOST} "grep -q 'http://127.0.0.1' ~/${LOG_FILE} 2>/dev/null"; then
+        break
     fi
     sleep 5
 done
 
 echo "✅ Your server is ready!"
-NODE=$(ssh ${HPC_HOST} "grep 'Preparing JupyterLab on node' ~/${LOG_FILE} | sed 's/.*node //;s/,.*//'")
+NODE=$(ssh ${HPC_HOST} "grep 'Launching JupyterLab on node' ~/${LOG_FILE} | sed 's/.*node //;s/,.*//'")
 JUPYTER_URL=$(ssh ${HPC_HOST} "grep 'http://127.0.0.1' ~/${LOG_FILE} | head -n 1 | grep -o 'http://[^ ]*'")
 PORT=$(echo ${JUPYTER_URL} | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
 TOKEN=$(echo ${JUPYTER_URL} | sed -n 's|.*token=\([^ ]*\).*|\1|p')
 FINAL_URL="http://localhost:${LOCAL_PORT}/?token=${TOKEN}"
 
-echo "Tunneling is being set up in a new terminal window..."
-SESSION_NAME="hpc-tunnel-${JOB_ID}"
-SSH_COMMAND="ssh -N -o StrictHostKeyChecking=no -L ${LOCAL_PORT}:localhost:${PORT} -J ${HPC_HOST} ${NODE}"
-
-osascript <<EOF
-tell application "Terminal"
-    activate
-    do script "tmux new -s ${SESSION_NAME} '${SSH_COMMAND}'"
-end tell
-EOF
+start_tmux_tunnel "hpc-tunnel-${JOB_ID}" "${HPC_HOST}" "${NODE}" "${LOCAL_PORT}" "${PORT}"
 
 sleep 2
-echo "🚀 Opening JupyterLab in your default browser..."
+echo "🚀 Opening JupyterLab..."
 open "${FINAL_URL}"
 
 echo ""
 echo "------------------------------------------------------------------"
-echo "✅ A new terminal window has opened and is running your SSH tunnel."
-echo "   You can safely close this original window."
+echo "✅ Session active. Logs are at:"
+echo "   Jupyter:       ~/logs/${JOB_NAME}-${JOB_ID}.log"
+echo "   MATLAB Server: ~/logs/matlab-server-${JOB_ID}.log"
 echo ""
-echo "   Jupyter Log:       ~/logs/${JOB_NAME}-${JOB_ID}.log"
-echo "   MATLAB Server Log: ~/logs/matlab-server-${JOB_ID}.log"
+echo "   URL: ${FINAL_URL}"
 echo ""
-echo "STEP 1: If it didn't open automatically, copy this URL:"
-echo "   ${FINAL_URL}"
-echo ""
-echo "STEP 2: To Reconnect (if tunnel breaks):"
-echo "   ./reconnect_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
-echo ""
-echo "STEP 3: To Stop Everything (Clean up):"
-echo "   ./kill_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
+echo "   To Stop: ./kill_hpc_jupyter.sh -H ${HPC_HOST} -j ${JOB_ID}"
 echo "------------------------------------------------------------------"

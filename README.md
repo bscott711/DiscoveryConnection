@@ -1,101 +1,137 @@
-# Interactive JupyterLab on the HPC with Automated Tunneling
+# DiscoveryConnection: HPC Workflows for PetaKit5D
 
-This guide provides a robust, user-friendly workflow for launching a persistent JupyterLab session on a GPU compute node. The process is fully automated: it submits a Slurm job, creates an SSH tunnel, and opens your browser—all in one step
-
----
-
-## Overview
-
-Instead of manually managing `tmux` sessions and tunnels, use the provided scripts to:
-
-- ✅ Start JupyterLab on a GPU node via Slurm
-- 🔒 Automatically create an SSH tunnel from your Mac to the compute node
-- 🌐 Open JupyterLab in your default browser
-- 🧹 Cleanly shut down both remote and local components when done
-
-No need to keep a terminal open—everything runs in the background until you're ready to stop.
+A collection of standardized scripts for launching interactive Jupyter sessions and batch processing jobs on the Discovery or Innovator HPC clusters.
 
 ---
 
-## Step 1: Start Your Session
+## 🚀 Workflows
 
-Run the launch script from your **local machine (Mac)**:
+This repository supports four primary modes of operation:
 
-```bash
-./start_hpc_jupyter.sh
-```
-
-This script will:
-
-1. Submit a Slurm job to start JupyterLab on a GPU node
-2. Wait for the server to initialize
-3. Automatically create an SSH tunnel using `tmux`
-4. Open JupyterLab in your default web browser
-
-💡 You’ll see output like:
-
-```bash
-🚀 Submitting JupyterLab job to the HPC...
-✅ Job submitted with ID: 940
-✅ Your server is ready!
-🚀 Opening JupyterLab in your default browser...
-```
-
-A new Terminal window will open and run the tunnel in the background. You can safely close the original terminal.
+1. **[Interactive Jupyter](#1-interactive-jupyter)**: Launch a persistent JupyterLab session on a compute node with automated SSH tunneling.
+2. **[Interactive Jupyter + MATLAB Server](#2-interactive-jupyter--matlab-server)**: Same as above, but includes a persistent background MATLAB worker for PetaKit processing.
+3. **[Batch PetaKit Processing](#3-batch-petakit-processing)**: Headless submission of large deskew/rotate datasets via Slurm.
+4. **[OPM Job Submission](#4-opm-job-submission)**: Lightweight CLI to submit JSON job tickets for the OPM pipeline.
 
 ---
 
-## Step 2: Stop Your Session
+## 🛠️ Prerequisites
 
-When finished, clean up both ends with one command:
+### Local Machine (macOS)
+
+- **Terminal & tmux**: Requires `tmux` for background tunneling.
+- **SSH Config**: You MUST have a host entry in `~/.ssh/config` named `Discovery` or `Innovator`.
+
+  ```ssh
+  Host Discovery
+      HostName discovery.hpc.edu
+      User your_username
+  ```
+
+### HPC Cluster
+
+- **Environment**: A Python virtual environment (default: `~/ppk5d`) with `jupyterlab` and `PyPetaKit5D` installed.
+- **Modules**: Access to `matlab` and `pypetakit5d` modules.
+- **Paths**: Project code should reside in `~/software` on the cluster.
+
+---
+
+## 📖 How to Run
+
+### 1. Interactive Jupyter
+
+Launches JupyterLab on a compute node and opens it in your local browser.
 
 ```bash
+# Start a session
+./start_hpc_jupyter.sh -H Discovery -p compute -c 4
+
+# Reconnect if the tunnel breaks
+./reconnect_hpc_jupyter.sh
+
+# Stop and clean up
 ./kill_hpc_jupyter.sh <JOB_ID>
 ```
 
-Replace `<JOB_ID>` with the number from the startup message (e.g., `940`).
+### 2. Interactive Jupyter + MATLAB Server
 
-Example:
+Ideal for interactive PetaKit5D development requiring a background worker.
 
 ```bash
-./kill_hpc_jupyter.sh 940
+# Start Jupyter + Server
+./start_hpc_jupyter_matlab.sh -p gpu -m 128 -g gpu:1
+
+# Or start a standalone worker
+./launch_petakit_worker.sh
+
+# Stop a standalone worker
+./kill_petakit_worker.sh <JOB_ID>
 ```
 
-This script will:
+### 3. Batch PetaKit Processing
 
-1. Cancel the Slurm job on the HPC
-2. Terminate the local `tmux` SSH tunnel session
-3. Print confirmation when cleanup is complete
+Submit large datasets for non-interactive processing.
 
-> ⚠️ Always use this script to avoid leaving orphaned jobs or tunnels running.
+```bash
+./run_workflow.sh -d /path/to/hpc/dataset -H Discovery
+```
 
----
+*Note: This automatically transfers the necessary Python CLIs to your HPC home before submission.*
 
-## How It Works
+### 4. OPM Job Submission
 
-| Component | Purpose |
-|---------|--------|
-| `start_hpc_jupyter.sh` | Launches JupyterLab via Slurm and sets up secure tunneling |
-| `kill_hpc_jupyter.sh` | Safely stops the job and closes the tunnel |
-| Slurm (`sbatch`) | Runs JupyterLab on a dedicated GPU node |
-| SSH `-L` + `-J` | Creates encrypted port forwarding through the login node |
-| `tmux` | Keeps the tunnel alive even if network drops |
+Submit individual job tickets for the automated pipeline.
+
+```bash
+python submit_opm.py /path/to/data --angle 122.0 --psf /path/to/psf.tif
+```
 
 ---
 
-## Requirements
+## ⚙️ Configuration & Customization
 
-- macOS with `Terminal.app` and `osascript` (built-in)
-- Access to the HPC cluster via SSH (configured as `Discovery`)
-- A Python virtual environment (e.g., `~/ppk5d`) with JupyterLab installed
-- MATLAB R2024b module available on the cluster
+### Central Shared Logic (`hpc_common.sh`)
+
+Common logic for port discovery, host validation, and tunnel management is factored into `hpc_common.sh`. Edit this file to add new clusters or change global default MATLAB paths.
+
+### Python CLIs
+
+Both `generate_config.py` and `process_job.py` are now parameterizable CLIs.
+
+```bash
+# Example: Custom config generation
+python generate_config.py --max-cpus 64 --mem-per-cpu 8.0
+```
+
+### Slurm Tweaks
+
+Resource requests (CPU, Mem, Time) can be passed as flags to the shell scripts:
+
+- `-c, --cpus`
+- `-m, --mem`
+- `-t, --time`
+- `-p, --partition`
 
 ---
 
-## Notes
+## 📂 File Structure
 
-- The tunnel uses a random high-numbered port on the compute node and forwards it to `localhost:9999` on your Mac.
-- If the browser doesn’t open automatically, copy the URL printed in the log file and change the port to `9999`.
-- These scripts are designed for ease of use and resilience—ideal for daily interactive computing.
+| File | Purpose |
+| :--- | :--- |
+| `hpc_common.sh` | **[Shared]** Logic for tunnels, ports, and host config. |
+| `start_hpc_jupyter.sh` | Interactive Jupyter launcher. |
+| `start_hpc_jupyter_matlab.sh` | Jupyter + PetaKit Server launcher. |
+| `reconnect_hpc_jupyter.sh` | Re-establishes broken SSH tunnels. |
+| `kill_hpc_jupyter.sh` | Remote job and local tunnel cleanup. |
+| `launch_petakit_worker.sh` | Headless MATLAB worker launcher. |
+| `kill_petakit_worker.sh` | Stops standalone MATLAB workers. |
+| `generate_config.py` | CLI for PyPetaKit5D cluster configuration. |
+| `process_job.py` | CLI for dataset processing submission. |
+| `run_workflow.sh` | Wrapper for batch job submission. |
+| `submit_opm.py` | Ticket generator for OPM jobs. |
 
 ---
+
+## 🧹 Maintenance
+
+Always use `./kill_hpc_jupyter.sh` to stop your sessions. This ensures both the Slurm job on the HPC and the `tmux` session on your Mac are terminated, preventing orphaned processes.

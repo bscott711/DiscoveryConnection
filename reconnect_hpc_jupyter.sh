@@ -1,19 +1,22 @@
 #!/bin/bash
+# reconnect_hpc_jupyter.sh
 #
 # A script to find a running HPC Jupyter session,
 # rebuild the SSH tunnel, and reconnect.
-#
 
 # --- Configuration & Defaults ---
 LOCAL_PORT="9999"
 HPC_HOST="Discovery"
 JOB_ID=""
 
+# Source common utilities
+source "$(dirname "$0")/hpc_common.sh"
+
 # --- Help Function ---
 show_usage() {
     echo "Usage: $0 [options]"
     echo ""
-    echo "Finds and reconnects to a running JupyterLab session."
+    echo "Finds and reconnects to a running JupyterLab session (macOS only)."
     echo ""
     echo "Options:"
     echo "  -H, --host <Host>    HPC host (Default: ${HPC_HOST})"
@@ -21,33 +24,30 @@ show_usage() {
     echo "  -j, --job <JOB_ID>   (Optional) A specific Job ID to reconnect to."
     echo "                       (Default: finds the latest running jupyter job)"
     echo "  -h, --help           Show this help message and exit"
+    echo ""
+    echo "Examples:"
+    echo "  $0"
+    echo "  $0 -H Innovator -j 12345"
 }
 
 # --- Argument Parsing ---
 while [[ $# -gt 0 ]]; do
     key="$1"
     case $key in
-        -h|--help)
-            show_usage
-            exit 0
-            ;;
-        -H|--host)
-            HPC_HOST="$2"
-            shift # past argument
-            shift # past value
-            ;;
-        -j|--job)
-            JOB_ID="$2"
-            shift # past argument
-            shift # past value
-            ;;
-        *)    # unknown option
-            echo "❌ Error: Unknown option: $1"
-            show_usage
-            exit 1
-            ;;
+        -h|--help) show_usage; exit 0 ;;
+        -H|--host) HPC_HOST="$2"; shift; shift ;;
+        -j|--job) JOB_ID="$2"; shift; shift ;;
+        *) echo "❌ Error: Unknown option: $1"; show_usage; exit 1 ;;
     esac
 done
+
+# --- Validation ---
+validate_host "$HPC_HOST" || exit 1
+
+if [[ "$OSTYPE" != "darwin"* ]]; then
+    echo "❌ Error: This script uses 'osascript' and is currently macOS-only."
+    exit 1
+fi
 
 echo "🔎 Searching for Jupyter job on ${HPC_HOST}..."
 
@@ -72,42 +72,27 @@ else
 fi
 
 # --- Find Log File ---
-# Use wildcard to find the log file regardless of ENV_NAME
-LOG_FILE_NAME=$(ssh ${HPC_HOST} "ls -1 ~/logs/jupyter-*-${JOB_ID}.log" 2>/dev/null)
+LOG_FILE_NAME=$(ssh ${HPC_HOST} "ls -1 ~/logs/jupyter-*-${JOB_ID}.log" 2>/dev/null | head -n 1)
 
 if [ -z "$LOG_FILE_NAME" ]; then
     echo "❌ Error: Could not find log file for job ${JOB_ID} in ~/logs/"
     exit 1
 fi
 
-LOG_FILE_PATH="~/${LOG_FILE_NAME##*/}" # Get just the 'logs/...' part
-
 echo "📄 Using log file: ${LOG_FILE_NAME}"
 
 # --- Get Connection Details ---
 echo "⏳ Fetching connection details..."
 
-# 1. Get Node Name via squeue (most reliable method)
-# %N gives the Node List for the job ID.
 NODE=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o %N" 2>/dev/null)
-
-# 2. Get URL, Port, and Token from the log file (which is successful)
 JUPYTER_URL=$(ssh ${HPC_HOST} "grep 'http://127.0.0.1' ${LOG_FILE_NAME} | head -n 1 | grep -o 'http://[^ ]*'")
 PORT=$(echo ${JUPYTER_URL} | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
 TOKEN=$(echo ${JUPYTER_URL} | sed -n 's|.*token=\([^ ]*\).*|\1|p')
 FINAL_URL="http://localhost:${LOCAL_PORT}/?token=${TOKEN}"
 
-if [ -z "$NODE" ]; then
-    echo "❌ Error: Could not find the compute node name (squeue returned empty)."
-    echo "   Job Status might be Pending or Missing."
-    exit 1
-fi
-
-if [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
-    echo "❌ Error: Could not parse URL/Port/Token from log file (${LOG_FILE_NAME})."
-    echo "   Node: ${NODE}"
-    echo "   Port: ${PORT}"
-    echo "   Token: ${TOKEN}"
+if [ -z "$NODE" ] || [ -z "$PORT" ] || [ -z "$TOKEN" ]; then
+    echo "❌ Error: Could not parse connection details for job ${JOB_ID}."
+    echo "   Node: ${NODE:-UNKNOWN}, Port: ${PORT:-UNKNOWN}"
     exit 1
 fi
 
@@ -115,26 +100,9 @@ echo "✅ Connection details found: Node=${NODE}, Port=${PORT}"
 
 # --- Rebuild Tunnel ---
 SESSION_NAME="hpc-tunnel-${JOB_ID}"
-
-# First, kill any old, dead session with the same name
-if tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
-    echo "🧹 Found old tunnel session. Killing it..."
-    tmux kill-session -t "${SESSION_NAME}"
-fi
-
-echo "🚀 Starting new tunnel in tmux session '${SESSION_NAME}'..."
-SSH_COMMAND="ssh -N -o StrictHostKeyChecking=no -L ${LOCAL_PORT}:localhost:${PORT} -J ${HPC_HOST} ${NODE}"
-
-osascript <<EOF
-tell application "Terminal"
-    activate
-    do script "tmux new -s ${SESSION_NAME} '${SSH_COMMAND}'"
-end tell
-EOF
+start_tmux_tunnel "${SESSION_NAME}" "${HPC_HOST}" "${NODE}" "${LOCAL_PORT}" "${PORT}"
 
 sleep 2
-
-# --- Open Browser ---
 echo "🚀 Opening JupyterLab in your default browser..."
 open "${FINAL_URL}"
 

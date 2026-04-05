@@ -2,6 +2,8 @@
 """
 Lightweight OPM Job Submitter for Login Nodes.
 Zero dependencies (Standard Lib only).
+
+This script generates JSON job tickets for the PetaKit queue.
 """
 
 import argparse
@@ -12,7 +14,6 @@ import sys
 from pathlib import Path
 
 # --- Configuration ---
-# Matches your system's folder structure
 QUEUE_DIR = Path.home() / "petakit_jobs" / "queue"
 
 # Default Physics Parameters (Fallback if metadata fails)
@@ -20,20 +21,16 @@ DEFAULTS = {
     "angle": 122.0,   # 90 + 32
     "xy": 0.136,
     "z": 1.0,
-    "iter": 10
+    "iter": 15
 }
 
-def parse_z_step(data_dir):
+def parse_z_step(data_dir: Path):
     """
-    Lightweight scan of AcqSettings.txt to find Z-step.
+    Lightweight scan of AcqSettings.txt or *_metadata.txt to find Z-step.
     """
     try:
-        # 1. Look for base name to find metadata file
-        # Try finding the metadata file directly in parent (common structure)
         parent = data_dir.parent
         meta_files = list(parent.glob("*_metadata.txt"))
-        
-        # If we can't find it easily, try the AcqSettings.txt which is often cleaner
         acq_file = parent / "AcqSettings.txt"
         
         target_file = None
@@ -45,12 +42,14 @@ def parse_z_step(data_dir):
         if not target_file:
             return None
 
-        # 2. Parse the file
         with open(target_file, 'r', encoding='latin-1') as f:
-            data = json.load(f)
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                # Fallback for non-JSON or corrupted files
+                return None
             
-        # Check standard keys
-        step = data.get("stepSizeUm") or data.get("zStep_um")
+        step = data.get("stepSizeUm") or data.get("zStep_um") or data.get("z_step_um")
         return float(step) if step else None
 
     except Exception:
@@ -60,16 +59,10 @@ def main():
     parser = argparse.ArgumentParser(description="Minimal OPM Job Submitter")
     
     parser.add_argument("input_dir", type=Path, help="Path to input directory")
-    
-    # Physics Overrides
     parser.add_argument("--angle", type=float, default=DEFAULTS["angle"], help="Sheet Angle")
     parser.add_argument("--xy", type=float, default=DEFAULTS["xy"], help="XY Pixel Size")
     parser.add_argument("--z", type=float, default=None, help="Z-Step (Auto-detected if skipped)")
-    
-    # ROI (Optional): xmin xmax ymin ymax
     parser.add_argument("--roi", type=int, nargs=4, help="Crop: xmin xmax ymin ymax")
-    
-    # Deconvolution
     parser.add_argument("--psf", type=str, default=None, help="Path to PSF file (Enables Decon)")
     parser.add_argument("--iter", type=int, default=DEFAULTS["iter"], help="Decon Iterations")
 
@@ -89,7 +82,6 @@ def main():
             print(f"Warning: Could not auto-detect Z-step. Using default: {z_step}")
     
     # 3. Determine Base Name (Smart Naming Fix)
-    # If the folder is named 'processed_tiff_series_split', grab the parent name instead.
     if args.input_dir.name == "processed_tiff_series_split":
         base_name = args.input_dir.parent.name
     else:
@@ -106,9 +98,7 @@ def main():
             "sheet_angle_deg": args.angle,
             "deskew": True,
             "rotate": True,
-            # Pass ROI if present
             "crop_box": args.roi if args.roi else None,
-            # Decon args
             "run_decon": bool(args.psf),
             "decon_iter": args.iter,
             "psf_path": args.psf
@@ -119,7 +109,6 @@ def main():
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     
     timestamp = int(time.time() * 1000)
-    # Clean filename (replace non-alphanumeric with _)
     safe_name = re.sub(r"[^\w\-_\.]", "_", base_name)
     job_filename = f"{safe_name}_{timestamp}.json"
     job_file = QUEUE_DIR / job_filename
@@ -135,4 +124,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
