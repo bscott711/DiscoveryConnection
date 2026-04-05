@@ -196,25 +196,27 @@ elif [[ "\${HPC_HOST_PASSED}" == "Innovator" ]]; then
 fi
 
 # --- START MATLAB ENV FIX ---
-# Manually set the environment variables from your .bashrc
-# This is required because sbatch doesn't load .bashrc or activate
 echo "✅ [sbatch] Manually setting MATLAB environment variables..."
 MATLAB_ROOT="/cm/shared/apps_local/matlab/R2024B"
 export LD_LIBRARY_PATH="\${MATLAB_ROOT}/runtime/glnxa64:\${MATLAB_ROOT}/bin/glnxa64:\${MATLAB_ROOT}/sys/os/glnxa64:\${MATLAB_ROOT}/sys/opengl/lib/glnxa64:\${LD_LIBRARY_PATH}"
 export MW_MCR_ROOT="\${MATLAB_ROOT}"
 # --- END MATLAB ENV FIX ---
 
-# --- Extend Python's Path ---
-# Instead of activating the venv, which conflicts with conda,
-# just add its site-packages to the PYTHONPATH.
-echo "Injecting venv packages from \${VENV_SITE_PACKAGES}"
-echo "Injecting local projects from \${SOFTWARE_PATH}"
-export PYTHONPATH="\${VENV_SITE_PACKAGES}:\${SOFTWARE_PATH}:\${PYTHONPATH}"
+# --- ISOLATE JUPYTER CONFIG ---
+echo "🧹 Cleaning up global Jupyter and Python paths..."
+unset PYTHONHOME  # <--- THIS KILLS THE HPC 3.12 OVERRIDE
+unset JUPYTER_PATH
+unset JUPYTER_CONFIG_DIR
+unset JUPYTER_DATA_DIR
+
+# --- STRICT PYTHON ISOLATION ---
+echo "🛡️ Enforcing local Python 3.11 isolation..."
+export PYTHONPATH="\${SOFTWARE_PATH}"
+export PATH="\$HOME/\${ENV_NAME_PASSED}/bin:\$PATH"
 
 echo "Launching JupyterLab..."
-# Run the base module's python, which can now find your
-# packages (like jupyter-matlab-proxy) via PYTHONPATH.
-python -m jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
+# Now that PYTHONHOME is dead, this binary will actually use its own 3.11 packages.
+\$HOME/\${ENV_NAME_PASSED}/bin/python -m jupyter lab --no-browser --ip=127.0.0.1 --port=\$port
 SBATCH_SCRIPT
 )
 # --- (End of job submission block) ---
