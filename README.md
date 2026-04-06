@@ -46,11 +46,11 @@ Launches JupyterLab on a compute node and opens it in your local browser.
 # Start a session
 ./start_hpc_jupyter.sh -H Discovery -p compute -c 4
 
-# Reconnect if the tunnel breaks
+# Reconnect if the tunnel breaks (finds the latest job automatically)
 ./reconnect_hpc_jupyter.sh
 
-# Stop and clean up
-./kill_hpc_jupyter.sh <JOB_ID>
+# Stop and clean up (finds the latest job automatically)
+./kill_hpc_jupyter.sh
 ```
 
 ### 2. Interactive Jupyter + MATLAB Server
@@ -63,6 +63,9 @@ Ideal for interactive PetaKit5D development requiring a background worker.
 
 # Or start a standalone worker
 ./launch_petakit_worker.sh
+
+# Re-attach and tail worker log
+./tail_petakit_worker.sh
 
 # Stop a standalone worker
 ./kill_petakit_worker.sh <JOB_ID>
@@ -124,6 +127,7 @@ Resource requests (CPU, Mem, Time) can be passed as flags to the shell scripts:
 | `reconnect_hpc_jupyter.sh` | Re-establishes broken SSH tunnels. |
 | `kill_hpc_jupyter.sh` | Remote job and local tunnel cleanup. |
 | `launch_petakit_worker.sh` | Headless MATLAB worker launcher. |
+| `tail_petakit_worker.sh` | Tails worker output logs. |
 | `kill_petakit_worker.sh` | Stops standalone MATLAB workers. |
 | `generate_config.py` | CLI for PyPetaKit5D cluster configuration. |
 | `process_job.py` | CLI for dataset processing submission. |
@@ -134,4 +138,4 @@ Resource requests (CPU, Mem, Time) can be passed as flags to the shell scripts:
 
 ## 🧹 Maintenance
 
-Always use `./kill_hpc_jupyter.sh` to stop your sessions. This ensures both the Slurm job on the HPC and the `tmux` session on your Mac are terminated, preventing orphaned processes.
+Always use `./kill_hpc_jupyter.sh` to stop your sessions. If no Job ID is provided, it will automatically search Discovery and Innovator for your latest running Jupyter job. This ensures both the Slurm job on the HPC and the `tmux` session on your Mac are terminated, preventing orphaned processes.

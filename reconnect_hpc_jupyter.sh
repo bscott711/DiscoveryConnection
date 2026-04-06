@@ -14,20 +14,23 @@ source "$(dirname "$0")/hpc_common.sh"
 
 # --- Help Function ---
 show_usage() {
-    echo "Usage: $0 [options]"
+    echo "Usage: $0 [options] [JOB_ID]"
     echo ""
     echo "Finds and reconnects to a running JupyterLab session (macOS only)."
     echo ""
     echo "Options:"
     echo "  -H, --host <Host>    HPC host (Default: ${HPC_HOST})"
     echo "                       Options: Discovery, Innovator"
-    echo "  -j, --job <JOB_ID>   (Optional) A specific Job ID to reconnect to."
-    echo "                       (Default: finds the latest running jupyter job)"
-    echo "  -h, --help           Show this help message and exit"
+    echo "  -j, --job <JOB_ID>   A specific Job ID to reconnect to."
+    echo "  -h, --help           Show this help message"
+    echo ""
+    echo "Note: If no Job ID or Host is provided, the script will search"
+    echo "both Discovery and Innovator for your latest running Jupyter job."
     echo ""
     echo "Examples:"
-    echo "  $0"
-    echo "  $0 -H Innovator -j 12345"
+    echo "  $0                  # Reconnect to latest job on default host"
+    echo "  $0 12345            # Reconnect to specific Job ID"
+    echo "  $0 -H Innovator     # Reconnect to latest job on Innovator"
 }
 
 # --- Argument Parsing ---
@@ -37,7 +40,16 @@ while [[ $# -gt 0 ]]; do
         -h|--help) show_usage; exit 0 ;;
         -H|--host) HPC_HOST="$2"; shift; shift ;;
         -j|--job) JOB_ID="$2"; shift; shift ;;
-        *) echo "❌ Error: Unknown option: $1"; show_usage; exit 1 ;;
+        *) 
+            if [[ "$1" =~ ^[0-9]+$ ]]; then
+                JOB_ID="$1"
+                shift
+            else
+                echo "❌ Error: Unknown option: $1"
+                show_usage
+                exit 1
+            fi
+            ;;
     esac
 done
 
@@ -49,33 +61,58 @@ if [[ "$OSTYPE" != "darwin"* ]]; then
     exit 1
 fi
 
-echo "🔎 Searching for Jupyter job on ${HPC_HOST}..."
-
 # --- Find Job ID ---
 if [ -z "$JOB_ID" ]; then
-    # If no Job ID is provided, find the latest running job with "jupyter-" in its name
+    echo "🔎 Searching for latest Jupyter job on ${HPC_HOST}..."
     JOB_ID=$(ssh ${HPC_HOST} "squeue -u \$USER -o '%.i %.j' -h | grep 'jupyter-' | sort -n -k1 | tail -n 1 | awk '{print \$1}'")
     
     if [ -z "$JOB_ID" ]; then
-        echo "❌ Error: No running 'jupyter-' jobs found for user on ${HPC_HOST}."
-        exit 1
+        # Swap host and try again if not specified
+        OTHER_HOST="Innovator"
+        if [ "$HPC_HOST" == "Innovator" ]; then OTHER_HOST="Discovery"; fi
+        
+        echo "🔍 No job found on ${HPC_HOST}. Trying ${OTHER_HOST}..."
+        JOB_ID=$(ssh ${OTHER_HOST} "squeue -u \$USER -o '%.i %.j' -h | grep 'jupyter-' | sort -n -k1 | tail -n 1 | awk '{print \$1}'")
+        
+        if [ -n "$JOB_ID" ]; then
+            HPC_HOST=$OTHER_HOST
+            echo "✅ Found job ${JOB_ID} on ${HPC_HOST}"
+        else
+            echo "❌ Error: No running 'jupyter-' jobs found for user on Discovery or Innovator."
+            exit 1
+        fi
+    else
+        echo "✅ Found latest running job: ${JOB_ID}"
     fi
-    echo "✅ Found latest running job: ${JOB_ID}"
 else
     # If Job ID was provided, just confirm it's running
     STATUS=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o %T" 2>/dev/null) || STATUS="UNKNOWN"
     if [[ "$STATUS" != "RUNNING" ]]; then
-        echo "❌ Error: Job ${JOB_ID} is not currently running (status: $STATUS)."
-        exit 1
+        # Check if it's on the other host
+        OTHER_HOST="Innovator"
+        if [ "$HPC_HOST" == "Innovator" ]; then OTHER_HOST="Discovery"; fi
+        
+        echo "🔍 Job ${JOB_ID} not running on ${HPC_HOST}. Checking ${OTHER_HOST}..."
+        STATUS=$(ssh ${OTHER_HOST} "squeue -j ${JOB_ID} -h -o %T" 2>/dev/null) || STATUS="UNKNOWN"
+        
+        if [[ "$STATUS" == "RUNNING" ]]; then
+            HPC_HOST=$OTHER_HOST
+            echo "✅ Job ${JOB_ID} confirmed running on ${HPC_HOST}."
+        else
+            echo "❌ Error: Job ${JOB_ID} is not currently running (status: $STATUS)."
+            exit 1
+        fi
+    else
+        echo "✅ Confirmed job ${JOB_ID} is running."
     fi
-    echo "✅ Confirmed job ${JOB_ID} is running."
 fi
 
 # --- Find Log File ---
-LOG_FILE_NAME=$(ssh ${HPC_HOST} "ls -1 ~/logs/jupyter-*-${JOB_ID}.log" 2>/dev/null | head -n 1)
+# Use head -n 1 just in case multiple logs exist for some reason
+LOG_FILE_NAME=$(ssh ${HPC_HOST} "ls -1 ~/logs/jupyter-*-${JOB_ID}.log 2>/dev/null | head -n 1")
 
 if [ -z "$LOG_FILE_NAME" ]; then
-    echo "❌ Error: Could not find log file for job ${JOB_ID} in ~/logs/"
+    echo "❌ Error: Could not find log file for job ${JOB_ID} on ${HPC_HOST}."
     exit 1
 fi
 
