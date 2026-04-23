@@ -6,11 +6,11 @@
 # --- Defaults ---
 HPC_HOST="Discovery"
 ENV_NAME="ppk5d"
-PARTITION="compute"
+PARTITION="" # Default empty for auto-select
 CPUS="48"
 MEMORY="250"
 TIME="2-00:00:00"
-GRES="gpu:0"
+GRES="gpu:1"
 PETAKIT_PATH="/cm/shared/apps_local/petakit5d"
 FOLLOW_LOG=true
 
@@ -27,6 +27,7 @@ show_usage() {
     echo "  -H, --host <Host>       HPC host (Default: ${HPC_HOST})"
     echo "  -e, --env <Env>         Local venv name (Default: ${ENV_NAME})"
     echo "  -p, --partition <Part>  Slurm partition (Default: ${PARTITION})"
+    echo "                          Available on Discovery: all-gpu, compute, gpu"
     echo "  -c, --cpus <CPUs>       Number of CPU cores (Default: ${CPUS})"
     echo "  -m, --mem <Memory>      Memory in GB (Default: ${MEMORY})"
     echo "  -t, --time <Time>       Job time limit (Default: ${TIME})"
@@ -57,18 +58,48 @@ done
 # --- Validation ---
 validate_host "$HPC_HOST" || exit 1
 
+# Ensure partition is lowercase (Slurm is case-sensitive)
+PARTITION=$(echo "$PARTITION" | tr '[:upper:]' '[:lower:]')
+
+# Handle GRES format (ensure gpu: prefix if only a number is given)
+if echo "$GRES" | grep -qE '^[0-9]+$'; then
+    GRES="gpu:${GRES}"
+fi
+
+# --- Auto-select partition if not provided ---
+if [[ -z "$PARTITION" ]]; then
+    log_info "Auto-selecting partition with ${CPUS} CPUs and ${MEMORY}GB RAM..."
+    # If GRES is set, prefer GPU partitions
+    PREFER_GPU="false"
+    if [[ -n "$GRES" ]]; then PREFER_GPU="true"; fi
+    
+    PARTITION=$(find_available_partition "$HPC_HOST" "$CPUS" "$MEMORY" "$PREFER_GPU")
+    if [[ $? -ne 0 ]]; then
+        log_warn "No idle resources found meeting requirements. Defaulting to 'gpu' partition."
+        PARTITION="gpu"
+    fi
+fi
+
+# Final safety check: if we ended up in compute but GRES is set, we must clear GRES
+if [[ "$PARTITION" == "compute"* ]]; then
+    if [[ -n "$GRES" ]]; then
+        log_warn "Partition '$PARTITION' does not support GPUs. Disabling GPU request for this job."
+        GRES=""
+    fi
+fi
+
 # --- MATLAB Config ---
 IFS=':' read -r MATLAB_MODULE MATLAB_ROOT <<< "$(get_matlab_config "$HPC_HOST")"
 
 MEMORY_GB="${MEMORY}G"
 JOB_NAME="petakit-worker"
 
-echo "🚀 Launching PetaKit Worker on ${HPC_HOST}..."
-echo "   Config:      ${MATLAB_MODULE}"
-echo "   Environment: ${ENV_NAME}"
+echo "🚀 Starting job with settings:"
+echo "   Host:         ${HPC_HOST}"
+echo "   Environment:  ${ENV_NAME}"
 echo "   PetaKit:     ${PETAKIT_PATH}"
-echo "   Resources:   ${CPUS} CPUs, ${MEMORY_GB} Mem, ${TIME}"
-
+echo "   Partition:   ${PARTITION:-[AUTO]}"
+echo "   Resources:   ${CPUS} CPUs, ${MEMORY_GB} Mem, GPUs: ${GRES:-None}, ${TIME}"
 # --- Remote Execution ---
 echo "📁 Ensuring 'logs' directory exists..."
 ssh ${HPC_HOST} "mkdir -p ~/logs"
@@ -136,16 +167,24 @@ echo "✅ Worker submitted! ID: ${JOB_ID}"
 echo "   Log: ~/logs/worker-${JOB_ID}.log"
 
 if [ "$FOLLOW_LOG" = true ]; then
-    echo "📡 Waiting for log file to appear..."
-    COUNT=0
     while ! ssh -q ${HPC_HOST} "[ -f ~/${LOG_FILE} ]"; do
-        if [ $COUNT -ge 20 ]; then
-            echo "⚠️  Log file not found yet. The job is likely still queued."
-            exit 0
+        # Fetch Status (%T) and Reason (%r)
+        SLURM_LINE=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o '%T|%r'" 2>/dev/null)
+        
+        if [[ -n "$SLURM_LINE" ]]; then
+            STATUS=$(echo "$SLURM_LINE" | awk -F'|' '{print $1}')
+            REASON=$(echo "$SLURM_LINE" | awk -F'|' '{print $2}')
+            echo -ne "\r⏳ Job ${JOB_ID} is ${STATUS} (${REASON})...          "
+        else
+            if ! ssh -q ${HPC_HOST} "[ -f ~/${LOG_FILE} ]"; then
+                echo -e "\n❌ Job ${JOB_ID} is no longer in queue and log file not found."
+                exit 1
+            fi
+            break
         fi
-        sleep 3
-        ((COUNT++))
+        sleep 5
     done
+    echo "" # Move to next line after status loop
     echo "✅ Streaming output (Ctrl+C to stop trailing):"
     ssh ${HPC_HOST} "tail -f ~/${LOG_FILE}"
 fi

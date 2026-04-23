@@ -8,11 +8,11 @@
 LOCAL_PORT="9999"
 HPC_HOST="Discovery"
 ENV_NAME="ppk5d" # Default personal venv name
-PARTITION="compute"
+PARTITION="" # Default empty for auto-select
 MEMORY="8"
 TIME="12:00:00"
 CPUS="1"
-GRES="gpu:0"
+GRES="gpu:1"
 
 # Source common utilities
 source "$(dirname "$0")/hpc_common.sh"
@@ -28,6 +28,7 @@ show_usage() {
     echo "                          Options: Discovery, Innovator"
     echo "  -e, --env <Env>         Your personal venv name (Default: ${ENV_NAME})"
     echo "  -p, --partition <Part>  Slurm partition (Default: ${PARTITION})"
+    echo "                          Available on Discovery: all-gpu, compute, gpu"
     echo "  -m, --mem <Memory>      Memory to request in GB (Default: ${MEMORY})"
     echo "  -t, --time <Time>       Job time limit (Default: ${TIME})"
     echo "  -c, --cpus <CPUs>       Number of CPU cores (Default: ${CPUS})"
@@ -57,6 +58,36 @@ done
 # --- Validation ---
 validate_host "$HPC_HOST" || exit 1
 
+# Ensure partition is lowercase (Slurm is case-sensitive)
+PARTITION=$(echo "$PARTITION" | tr '[:upper:]' '[:lower:]')
+
+# Handle GRES format (ensure gpu: prefix if only a number is given)
+if echo "$GRES" | grep -qE '^[0-9]+$'; then
+    GRES="gpu:${GRES}"
+fi
+
+# --- Auto-select partition if not provided ---
+if [[ -z "$PARTITION" ]]; then
+    log_info "Auto-selecting partition with ${CPUS} CPUs and ${MEMORY}GB RAM..."
+    # If GRES is set, prefer GPU partitions
+    PREFER_GPU="false"
+    if [[ -n "$GRES" ]]; then PREFER_GPU="true"; fi
+
+    PARTITION=$(find_available_partition "$HPC_HOST" "$CPUS" "$MEMORY" "$PREFER_GPU")
+    if [[ $? -ne 0 ]]; then
+        log_warn "No idle resources found meeting requirements. Defaulting to 'gpu' partition."
+        PARTITION="gpu"
+    fi
+fi
+
+# Final safety check: if we ended up in compute but GRES is set, we must clear GRES
+if [[ "$PARTITION" == "compute"* ]]; then
+    if [[ -n "$GRES" ]]; then
+        log_warn "Partition '$PARTITION' does not support GPUs. Disabling GPU request for this job."
+        GRES=""
+    fi
+fi
+
 # --- Configure MATLAB based on Host ---
 IFS=':' read -r MATLAB_MODULE MATLAB_ROOT <<< "$(get_matlab_config "$HPC_HOST")"
 
@@ -71,11 +102,9 @@ JOB_NAME="jupyter-${ENV_NAME}"
 echo "🚀 Starting job with settings:"
 echo "   Host:         ${HPC_HOST}"
 echo "   Environment:  ${ENV_NAME} (at ~/${ENV_NAME}/bin/activate)"
-echo "   Partition:    ${PARTITION}"
-echo "   Memory:       ${MEMORY_GB}"
-echo "   Time:         ${TIME}"
-echo "   CPUs:         ${CPUS}"
-echo "   GPUs:         ${GRES}"
+echo "   Partition:    ${PARTITION:-[AUTO]}"
+echo "   Resources:    ${CPUS} CPUs, ${MEMORY_GB} Mem, GPUs: ${GRES:-None}, ${TIME}"
+echo ""
 
 # --- Main Logic ---
 echo "📁 Ensuring 'logs' directory exists on ${HPC_HOST}..."
@@ -149,14 +178,30 @@ echo "⏳ Waiting for job to start and URL to be ready (checking ~/${LOG_FILE}).
 
 while true;
 do
-    STATUS=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o %T" 2>/dev/null) || STATUS="UNKNOWN"
-    if [[ "$STATUS" != "PENDING" && "$STATUS" != "RUNNING" ]]; then
-        echo "❌ Job ${JOB_ID} is no longer running (status: $STATUS). Check output with:"
-        echo "   ssh ${HPC_HOST} 'cat ~/${LOG_FILE}'"
-        exit 1
+    # Fetch Status (%T) and Reason (%r)
+    SLURM_LINE=$(ssh ${HPC_HOST} "squeue -j ${JOB_ID} -h -o '%T|%r'" 2>/dev/null)
+    
+    if [[ -n "$SLURM_LINE" ]]; then
+        STATUS=$(echo "$SLURM_LINE" | awk -F'|' '{print $1}')
+        REASON=$(echo "$SLURM_LINE" | awk -F'|' '{print $2}')
+        
+        if [[ "$STATUS" != "PENDING" && "$STATUS" != "RUNNING" ]]; then
+            echo -e "\n❌ Job ${JOB_ID} is in status ${STATUS}. Check output with:"
+            echo "   ssh ${HPC_HOST} 'cat ~/${LOG_FILE}'"
+            exit 1
+        fi
+        echo -ne "\r⏳ Job ${JOB_ID} is ${STATUS} (${REASON})...          "
+    else
+        # If job is not in squeue, check if it finished or failed
+        if ! ssh ${HPC_HOST} "[ -f ~/${LOG_FILE} ]"; then
+            echo -e "\n❌ Job ${JOB_ID} is no longer in queue and log file not found."
+            exit 1
+        fi
     fi
+
     if ssh ${HPC_HOST} "[ -f ~/${LOG_FILE} ]"; then
         if ssh ${HPC_HOST} "grep -q 'http://127.0.0.1' ~/${LOG_FILE}"; then
+            echo "" # Move to next line after status loop
             break
         fi
     fi

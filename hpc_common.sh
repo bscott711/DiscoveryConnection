@@ -4,6 +4,12 @@
 # This file is meant to be sourced by other scripts:
 #   source "$(dirname "$0")/hpc_common.sh"
 
+# --- Logging ---
+log_info() { echo -e "[\033[0;34mINFO\033[0m] $1"; }
+log_warn() { echo -e "[\033[0;33mWARN\033[0m] $1"; }
+log_error() { echo -e "[\033[0;31mERROR\033[0m] $1"; }
+
+
 # --- Host Validation ---
 validate_host() {
     local host=$1
@@ -95,4 +101,50 @@ echo "✅ [sbatch] Setting MATLAB environment variables..."
 export LD_LIBRARY_PATH="${matlab_root}/runtime/glnxa64:${matlab_root}/bin/glnxa64:${matlab_root}/sys/os/glnxa64:${matlab_root}/sys/opengl/lib/glnxa64:\${LD_LIBRARY_PATH}"
 export MW_MCR_ROOT="${matlab_root}"
 EOF
+}
+
+# --- Partition Selection ---
+find_available_partition() {
+    local hpc_host=$1
+    local min_cpus=${2:-1}
+    local min_mem_gb=${3:-8}
+    local prefer_gpu=${4:-false}
+    local min_mem_mb=$((min_mem_gb * 1024))
+
+    # Get nodes that meet the requirements
+    local result=$(ssh ${hpc_host} "sinfo -h -O Partition,FreeMem,CPUsState" 2>/dev/null | awk -v c=$min_cpus -v m=$min_mem_mb '{
+        split($3, cpus, "/");
+        idle_cpus = cpus[2];
+        free_mem = $2;
+        if (idle_cpus >= c && free_mem >= m) {
+            print $1;
+        }
+    }' | sort -u)
+
+    if [[ -z "$result" ]]; then
+        return 1
+    fi
+
+    if [[ "$prefer_gpu" == "true" ]]; then
+        # Prioritize: gpu, all-gpu, then compute
+        if echo "$result" | grep -q "gpu"; then
+            echo "gpu"
+        elif echo "$result" | grep -q "all-gpu"; then
+            echo "all-gpu"
+        elif echo "$result" | grep -q "compute"; then
+            echo "compute"
+        else
+            echo "$result" | head -n 1
+        fi
+    else
+        # Prioritize: compute, then gpu, then others
+        if echo "$result" | grep -q "compute"; then
+            echo "compute"
+        elif echo "$result" | grep -q "gpu"; then
+            echo "gpu"
+        else
+            echo "$result" | head -n 1
+        fi
+    fi
+    return 0
 }

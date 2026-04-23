@@ -48,7 +48,7 @@ fi
 validate_host "$HPC_LOGIN" || exit 1
 
 # Files to transfer
-SCRIPTS=("generate_config.py" "process_job.py" "submit_compute_job.sbatch")
+SCRIPTS=("generate_config.py" "process_job.py" "submit_compute_job.sbatch" "run_bigtiff_cropper.m")
 
 # Check for existence locally
 for script in "${SCRIPTS[@]}"; do
